@@ -1,0 +1,12 @@
+Foco: 1 relevant files.
+Roles are estimates. Declaration locations omitted.
+AGENTS.md lookup (root and returned-file ancestors): "AGENTS.md".
+- "src/events.ts" — implementation; source below
+End file list.
+
+Source block "src/events.ts" lines 1-1:
+```
+export function record(name: string) { return name; }
+```
+
+End context.

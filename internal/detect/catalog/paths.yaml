@@ -1,0 +1,77 @@
+# Credential-bearing path catalog.
+#
+# Explicit, credential-only entries. Broad scanning globs (generic `secrets.*`
+# and `*credentials*` wildcards, `*.log`, `*.sql`, generic `*.json`/`*.xml`/
+# `*.yaml`, and the public-key risk `**/.ssh/id_*`) are intentionally omitted
+# because `eligibility()` uses this catalog to expand `sensitive_name`.
+commit: "bac0c7d39519203d230b6c9a2c6e3eba18346aba"
+source: "https://github.com/eth0izzle/shhgit"
+license: "MIT"
+
+names:
+  # Generic environment and credential-store filenames.
+  - ".env"
+  - ".npmrc"
+  - ".pypirc"
+  - ".netrc"
+  - ".pgpass"
+  - ".htpasswd"
+  - ".s3cfg"
+  - ".git-credentials"
+  - ".databrickscfg"
+  - "credentials"
+  - "credentials.json"
+  - "secrets.json"
+  - "secrets.yaml"
+  - "secrets.yml"
+  - ".kdbx"
+
+  # Private key base names.
+  - "id_rsa"
+  - "id_dsa"
+  - "id_ecdsa"
+  - "id_ed25519"
+
+  # Cloud and tooling service-account/state files.
+  - "service-account.json"
+  - "terraform.tfstate"
+  - "terraform.tfvars"
+  - "sftp-config.json"
+  - "knife.rb"
+  - "secret_token.rb"
+  - "proftpdpasswd"
+  - "otr.private_key"
+  - ".dockercfg"
+
+globs:
+  # Private keys and certificate stores.
+  - "*.pem"
+  - "**/*.pem"
+  - "*.key"
+  - "**/*.key"
+  - "*.p12"
+  - "**/*.p12"
+  - "*.pfx"
+  - "**/*.pfx"
+  - "*.keystore"
+  - "**/*.keystore"
+  - "*.jks"
+  - "**/*.jks"
+  - "*.kdbx"
+  - "**/*.kdbx"
+  - "*.ppk"
+  - "**/*.ppk"
+  - "*.pkcs12"
+  - "**/*.pkcs12"
+
+  # Credential-bearing paths.
+  - "**/.aws/credentials"
+  - "**/.cargo/credentials"
+  - "**/.docker/config.json"
+  - "**/.kube/config"
+  - "**/.ssh/id_rsa"
+  - "**/.ssh/id_dsa"
+  - "**/.ssh/id_ecdsa"
+  - "**/.ssh/id_ed25519"
+  - "**/service-account-*.json"
+  - "**/terraform.tfstate"

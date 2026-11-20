@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "positive": [
+    {"type": "aws_access_key", "path": "positive/aws_access_key.yaml"},
+    {"type": "aws_secret", "path": "positive/aws_secret.yaml"},
+    {"type": "github_pat", "path": "positive/github_pat.json"},
+    {"type": "db_password", "path": "positive/db_password.cfg"},
+    {"type": "pem", "path": "positive/private_key.properties", "generate": "rsa2048"}
+  ],
+  "benign": [
+    {"type": "aws_lookalike", "path": "benign/aws_docs.yaml"},
+    {"type": "github_lookalike", "path": "benign/github_docs.json"},
+    {"type": "slack_lookalike", "path": "benign/slack_docs.ini"},
+    {"type": "password_placeholder", "path": "benign/placeholder_password.cfg"},
+    {"type": "public_key", "path": "benign/public_key.properties"}
+  ]
+}
