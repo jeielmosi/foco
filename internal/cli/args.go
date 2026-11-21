@@ -55,6 +55,8 @@ type SearchOptions struct {
 	NoCache        bool
 	Concurrency    int
 	Parallel       int
+	NavBatchSize   int
+	NavBatchBytes  int
 	MaxRequests    int
 	MaxSourceBytes int64
 	MaxOutputBytes int64
@@ -127,7 +129,7 @@ func isVersionToken(arg string) bool { return arg == "--version" || arg == "-v" 
 // another flag, matching the way pflag consumes a following token.
 var valueFlagNames = map[string]bool{
 	"schema": true, "endpoint": true, "model": true, "agent": true,
-	"concurrency": true, "parallel": true, "max-requests": true, "max-source-bytes": true,
+	"concurrency": true, "parallel": true, "nav-batch-size": true, "nav-batch-bytes": true, "max-requests": true, "max-source-bytes": true,
 	"max-output-bytes": true, "exclude": true, "only": true, "exclude-types": true,
 }
 
@@ -172,6 +174,8 @@ func newRootCommand(target *Command) *cobra.Command {
 	flags := root.Flags()
 	flags.String("concurrency", "", "")
 	flags.String("parallel", "", "")
+	flags.String("nav-batch-size", "", "")
+	flags.String("nav-batch-bytes", "", "")
 	flags.String("max-requests", "", "")
 	flags.String("max-source-bytes", "", "")
 	flags.String("max-output-bytes", "", "")
@@ -274,7 +278,7 @@ func searchRaw(cmd *cobra.Command, positionals []string) rawArgs {
 	} {
 		collectBool(&raw, cmd, name)
 	}
-	for _, name := range []string{"concurrency", "parallel", "max-requests", "max-source-bytes", "max-output-bytes"} {
+	for _, name := range []string{"concurrency", "parallel", "nav-batch-size", "nav-batch-bytes", "max-requests", "max-source-bytes", "max-output-bytes"} {
 		collectString(&raw, cmd, name)
 	}
 	for _, name := range []string{"exclude", "only", "exclude-types"} {
@@ -373,7 +377,7 @@ func parseSearch(raw rawArgs) (Command, error) {
 		return Command{}, usageError(`Usage: foco "question" [root]. Run foco --help.`)
 	}
 	for key := range raw.values {
-		if !isPolicyFlag(key) && key != "no-cache" && key != "concurrency" && key != "parallel" && key != "max-requests" &&
+		if !isPolicyFlag(key) && key != "no-cache" && key != "concurrency" && key != "parallel" && key != "nav-batch-size" && key != "nav-batch-bytes" && key != "max-requests" &&
 			key != "max-source-bytes" && key != "max-output-bytes" && key != "no-locations" {
 			return Command{}, usageError(`Usage: foco "question" [root]. Run foco --help.`)
 		}
@@ -404,6 +408,20 @@ func parseSearch(raw rawArgs) (Command, error) {
 			search.Parallel = runtime.NumCPU()
 		}
 	}
+	if raw.has("nav-batch-size") {
+		value, parseErr := digits(raw.one("nav-batch-size"))
+		if parseErr != nil || value < 1 || value > maxNavBatchSize {
+			return Command{}, usageError("--nav-batch-size must be an integer from 1 to 4096.")
+		}
+		search.NavBatchSize = int(value)
+	}
+	if raw.has("nav-batch-bytes") {
+		value, parseErr := digits(raw.one("nav-batch-bytes"))
+		if parseErr != nil || value < minNavBatchBytes || value > maxNavBatchBytes {
+			return Command{}, usageError("--nav-batch-bytes must be an integer from 38000 to 4000000.")
+		}
+		search.NavBatchBytes = int(value)
+	}
 	if raw.has("max-requests") {
 		search.MaxRequests, err = positiveInt("max-requests", raw.one("max-requests"))
 		if err != nil {
@@ -429,6 +447,14 @@ func parseSearch(raw rawArgs) (Command, error) {
 	search.Policy = policy
 	return Command{Kind: KindSearch, Search: search}, nil
 }
+
+// Navigation batch limits. Below the default byte limit, single file previews
+// no longer fit one request and would be chunked or dropped.
+const (
+	maxNavBatchSize  = 4096
+	minNavBatchBytes = 38_000
+	maxNavBatchBytes = 4_000_000
+)
 
 // DefaultParallel is the CPU cores a search uses by default: half of them, so
 // a search never saturates the machine it runs on.

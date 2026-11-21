@@ -92,7 +92,7 @@ func groupWindows(index *textIndex, windows []window) [][]window {
 	for _, entry := range windows {
 		if len(current) > 0 {
 			byteLength := index.offsets[entry.Range.EndLine] - index.offsets[current[0].Range.StartLine-1]
-			if len(current) >= NavigationBatchSize || byteLength > 42000 {
+			if len(current) >= SelectionBatchSize || byteLength > 42000 {
 				groups = append(groups, current)
 				current = []window{}
 			}

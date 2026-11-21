@@ -159,7 +159,7 @@ func discover(
 					items = append(items, item)
 					continue
 				}
-				if requestSize(requests.NavigationRequest(query, []requests.NavigationItem{item}, anchor)) > NavigationBatchBytes {
+				if requestSize(requests.NavigationRequest(query, []requests.NavigationItem{item}, anchor)) > navigator.batchBytes {
 					for _, chunk := range splitText(result.Snapshot.Source, 12_000) {
 						items = append(items, requests.NavigationItem{
 							Path: relative, Kind: enums.NavigationKindFile,

@@ -176,6 +176,8 @@ func TestUsageMessagesMatchUpstream(t *testing.T) {
 		{[]string{"q", "--concurrency", "+1"}, "--concurrency must be a positive integer."},
 		{[]string{"q", "--parallel", "-1"}, "--parallel must be an integer from 0 (all CPU cores) to 4096."},
 		{[]string{"q", "--parallel", "4097"}, "--parallel must be an integer from 0 (all CPU cores) to 4096."},
+		{[]string{"q", "--nav-batch-size", "0"}, "--nav-batch-size must be an integer from 1 to 4096."},
+		{[]string{"q", "--nav-batch-bytes", "37999"}, "--nav-batch-bytes must be an integer from 38000 to 4000000."},
 		{[]string{"q", "--max-requests", "0"}, "--max-requests must be a positive integer."},
 		{[]string{"q", "--max-requests", "1e2"}, "--max-requests must be a positive integer."},
 		{[]string{"q", "--max-source-bytes=-1"}, "--max-source-bytes must be a nonnegative integer (0 means unlimited)."},
@@ -215,6 +217,20 @@ func TestParallelDefaultsToHalfTheCores(t *testing.T) {
 		if command.Search.Parallel != tc.want {
 			t.Fatalf("%v: parallel = %d, want %d", tc.args, command.Search.Parallel, tc.want)
 		}
+	}
+}
+
+func TestNavigationBatchFlags(t *testing.T) {
+	command, err := Parse([]string{"q", "--nav-batch-size", "512", "--nav-batch-bytes=200000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command.Search.NavBatchSize != 512 || command.Search.NavBatchBytes != 200000 {
+		t.Fatalf("search = %+v", command.Search)
+	}
+	command, err = Parse([]string{"q"})
+	if err != nil || command.Search.NavBatchSize != 0 || command.Search.NavBatchBytes != 0 {
+		t.Fatalf("defaults must stay unset: %+v, %v", command.Search, err)
 	}
 }
 

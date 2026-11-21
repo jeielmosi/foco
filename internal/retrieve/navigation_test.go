@@ -175,7 +175,7 @@ func TestNavigatorProbesWaveConcurrentlyButAppliesInOrder(t *testing.T) {
 		{Path: "b.ts", Kind: enums.NavigationKindFile, FilePreview: &requests.FilePreview{Text: large}},
 		{Path: "c.ts", Kind: enums.NavigationKindFile, FilePreview: &requests.FilePreview{Text: large}},
 	}
-	if groups := groupNavigation("q", items, nil, func(enums.RetrievalIssueCode) {}); len(groups) != 3 {
+	if groups := groupNavigation("q", items, nil, NavigationBatchSize, NavigationBatchBytes, func(enums.RetrievalIssueCode) {}); len(groups) != 3 {
 		t.Fatalf("groups = %d, want 3", len(groups))
 	}
 	evaluator := &scriptedEvaluator{answers: func(request provider.Request) (map[string]float64, error) {

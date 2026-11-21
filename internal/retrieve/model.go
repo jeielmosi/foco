@@ -22,6 +22,7 @@ const (
 	PreviewSampleJSONBytes   = 28_000
 	NavigationBatchSize      = 128
 	NavigationBatchBytes     = 38_000
+	SelectionBatchSize       = 128
 	EvidenceBytes            = 64_000
 	SourceConfidenceBoundary = 0.7
 	DiscoveryLimit           = 100_000

@@ -52,6 +52,9 @@ type navigator struct {
 	stopped   bool
 	probes    map[string]struct{}
 	settle    sync.Mutex
+
+	batchSize  int
+	batchBytes int
 }
 
 func newNavigator(
@@ -63,6 +66,7 @@ func newNavigator(
 	return &navigator{
 		ctx: ctx, query: query, evaluator: evaluator, issues: issues,
 		donors: donors, validate: validate, probe: probe, probes: map[string]struct{}{},
+		batchSize: NavigationBatchSize, batchBytes: NavigationBatchBytes,
 	}
 }
 
@@ -74,7 +78,7 @@ func requestSize(request provider.Request) int {
 	return len(blob)
 }
 
-func groupNavigation(query string, items []requests.NavigationItem, anchor *requests.RelationAnchor, issue func(enums.RetrievalIssueCode)) [][]requests.NavigationItem {
+func groupNavigation(query string, items []requests.NavigationItem, anchor *requests.RelationAnchor, batchSize, batchBytes int, issue func(enums.RetrievalIssueCode)) [][]requests.NavigationItem {
 	var groups [][]requests.NavigationItem
 	current := []requests.NavigationItem{}
 	flush := func() {
@@ -84,14 +88,14 @@ func groupNavigation(query string, items []requests.NavigationItem, anchor *requ
 		}
 	}
 	for _, item := range items {
-		if requestSize(requests.NavigationRequest(query, []requests.NavigationItem{item}, anchor)) > NavigationBatchBytes {
+		if requestSize(requests.NavigationRequest(query, []requests.NavigationItem{item}, anchor)) > batchBytes {
 			issue(enums.IssueCodeRequestSize)
 			continue
 		}
 		if len(current) > 0 {
 			candidate := append(append([]requests.NavigationItem{}, current...), item)
-			if len(current) >= NavigationBatchSize ||
-				requestSize(requests.NavigationRequest(query, candidate, anchor)) > NavigationBatchBytes {
+			if len(current) >= batchSize ||
+				requestSize(requests.NavigationRequest(query, candidate, anchor)) > batchBytes {
 				flush()
 			}
 		}
@@ -228,7 +232,7 @@ func (n *navigator) score(
 	finalChoices func() []string,
 	consume func(requests.NavigationItem, float64),
 ) error {
-	groups := groupNavigation(n.query, items, anchor, n.issues.add)
+	groups := groupNavigation(n.query, items, anchor, n.batchSize, n.batchBytes, n.issues.add)
 	for start := 0; start < len(groups); start += StageWorkers {
 		if n.issues.fatal() {
 			return nil

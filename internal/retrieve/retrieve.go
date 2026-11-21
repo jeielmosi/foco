@@ -18,6 +18,10 @@ var errSourceInvalid = errors.New("source invalid")
 type Input struct {
 	Query    string
 	Progress func(ProgressSnapshot)
+	// NavigationBatchSize and NavigationBatchBytes cap the items and the
+	// serialized size of one navigation request; zero means the default.
+	NavigationBatchSize  int
+	NavigationBatchBytes int
 }
 
 type runState struct {
@@ -107,6 +111,12 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 		}
 		return outcome
 	})
+	if input.NavigationBatchSize > 0 {
+		navigator.batchSize = input.NavigationBatchSize
+	}
+	if input.NavigationBatchBytes > 0 {
+		navigator.batchBytes = input.NavigationBatchBytes
+	}
 	stopPrefetch := startCandidatePrefetch(ctx, evaluator, reader, input.Query, discovery)
 	defer stopPrefetch()
 	if err := discover(ctx, state.root, reader, input.Query, []string{"."}, nil, navigator, state.issues.add, state.issues.fatal, state.report, discovery); err != nil {
