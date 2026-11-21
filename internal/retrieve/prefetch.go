@@ -49,8 +49,6 @@ func readSnapshots(ctx context.Context, reader Reader, paths []string) []files.S
 	return out
 }
 
-// prefetcher is implemented by evaluators that can send a request ahead of
-// need and answer a later identical Evaluate from memory.
 type prefetcher interface {
 	Prefetch(ctx context.Context, request provider.Request)
 }
@@ -74,7 +72,6 @@ var errPrefetched = errors.New("prefetched")
 // only on the query, the path and the file content, so they can be sent while
 // discovery is still waiting on navigation, using concurrency it leaves idle.
 // The final passes then build identical requests and get memoized answers.
-// The returned stop cancels outstanding prefetches and waits for them.
 func startCandidatePrefetch(ctx context.Context, evaluator Evaluator, reader Reader, query string, discovery *discoveryState) func() {
 	source, ok := evaluator.(prefetcher)
 	if !ok {

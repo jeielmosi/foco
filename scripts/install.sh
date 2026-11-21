@@ -43,10 +43,9 @@ rm -f "$PROJECT/$source_bin"
 [ -f "$PROJECT/$source_bin" ] || die "missing $source_bin"
 command -v "$INSTALL" >/dev/null 2>&1 || die "$INSTALL was not found"
 
-# Vectorscan is a shared library (libhs), not a separate program. On Linux the
-# accelerated binary looks for it in ../lib/foco next to itself first, so copy
-# the exact libhs it was linked against there. The installed foco then keeps
-# working if the build-time copy is removed or the system library changes.
+# The accelerated binary also looks for libhs in ../lib/foco (see build.sh), so
+# the installed foco keeps working if the build-time libhs is removed or the
+# system library changes.
 LIBDIR="$(dirname "$BINDIR")/lib/foco"
 
 linked_libhs() {

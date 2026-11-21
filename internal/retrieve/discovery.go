@@ -16,8 +16,7 @@ type discoveryState struct {
 	Pruned      map[string]requests.NavigationItem
 	Previews    map[string]*requests.FilePreview
 	Donors      map[string][]Donor
-	// Admitted, when set, is called once per newly admitted candidate path.
-	Admitted func(path string)
+	Admitted    func(path string)
 }
 
 type levelDirectory struct {

@@ -182,9 +182,7 @@ case "$MODE" in
 		exit 1
 		;;
 	test|--test)
-		# Runs go test with the accelerated tag, using the same libhs discovery
-		# as builds (system, Homebrew, or the local download). Exits 3 when no
-		# libhs is available so callers can treat that as "skipped".
+		# Exit 3 when no libhs is available so callers can treat it as "skipped".
 		add_brew_path
 		add_local_path
 		if ! have_libhs && ! ensure_vectorscan; then
