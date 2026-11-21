@@ -2,9 +2,11 @@ package retrieve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -295,8 +297,12 @@ func TestRunStopsAfterFatalAssessment(t *testing.T) {
 	if assessments != 3 {
 		t.Fatalf("assessment requests = %d, want 3", assessments)
 	}
-	if evidence != 0 {
-		t.Fatalf("evidence requests = %d, want 0", evidence)
+	// Selection runs concurrently with assessment, but a fatal assessment
+	// discards its outcome: no file may carry selected source.
+	for _, file := range result.Files {
+		if len(file.Excerpts) != 0 || len(file.SourceDecisions) != 0 {
+			t.Fatalf("selection survived fatal assessment (evidence requests = %d): %+v", evidence, file)
+		}
 	}
 	if result.Status != enums.RetrievalStatusIncomplete {
 		t.Fatalf("status = %q", result.Status)
@@ -524,6 +530,93 @@ func TestEvidenceDonorChangeIsNotSentAndRecorded(t *testing.T) {
 	}
 	if found < 2 {
 		t.Fatalf("changed count = %d (issues = %+v), want the evidence pass plus finalization", found, result.Issues)
+	}
+}
+
+type prefetchingEvaluator struct {
+	*scriptedEvaluator
+	mu         sync.Mutex
+	prefetched map[string]bool
+	evaluated  map[string]bool
+}
+
+func requestKey(request provider.Request) string {
+	blob, _ := json.Marshal(request)
+	return string(blob)
+}
+
+func (e *prefetchingEvaluator) Prefetch(_ context.Context, request provider.Request) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.prefetched[requestKey(request)] = true
+}
+
+func (e *prefetchingEvaluator) Evaluate(ctx context.Context, request provider.Request, options provider.EvalOptions) (map[string]float64, error) {
+	e.mu.Lock()
+	e.evaluated[requestKey(request)] = true
+	e.mu.Unlock()
+	return e.scriptedEvaluator.Evaluate(ctx, request, options)
+}
+
+func TestCandidatePrefetchWarmsExactlyTheFinalRequests(t *testing.T) {
+	root := t.TempDir()
+	writeRetrieveFile(t, root, "src/events.ts", "export function record(name: string) { return name; }\n")
+	writeRetrieveFile(t, root, "src/other.ts", "export const other = 1;\n")
+	writeRetrieveFile(t, root, "README.md", "docs\n")
+	run := func(evaluator Evaluator) RetrievalResult {
+		reader, err := files.New(root, files.DefaultPolicy(), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close()
+		result, err := Run(context.Background(), Input{Query: "event recording"}, evaluator, reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result.Counts = Counts{}
+		return result
+	}
+	plain := run(pipelineEvaluator(nil))
+	warmed := &prefetchingEvaluator{scriptedEvaluator: pipelineEvaluator(nil), prefetched: map[string]bool{}, evaluated: map[string]bool{}}
+	got := run(warmed)
+	if !reflect.DeepEqual(plain, got) {
+		t.Fatalf("prefetch changed the result:\n%+v\n%+v", plain, got)
+	}
+	if len(warmed.prefetched) == 0 {
+		t.Fatal("no requests were prefetched")
+	}
+	for key := range warmed.prefetched {
+		if !warmed.evaluated[key] {
+			t.Fatalf("prefetched request never sent for real: %s", key)
+		}
+	}
+}
+
+func TestNoRequestExceedsTheQuestionLimit(t *testing.T) {
+	root := t.TempDir()
+	for index := range 250 {
+		writeRetrieveFile(t, root, "f"+itoa(index)+".ts", "export const value"+itoa(index)+" = 1;\n")
+	}
+	writeRetrieveFile(t, root, "big.ts", strings.Repeat("export function handler() { return 1; }\n", 6000))
+	reader, err := files.New(root, files.DefaultPolicy(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var mu sync.Mutex
+	most := 0
+	inner := pipelineEvaluator(nil)
+	evaluator := &scriptedEvaluator{answers: func(request provider.Request) (map[string]float64, error) {
+		mu.Lock()
+		most = max(most, len(request.Questions))
+		mu.Unlock()
+		return inner.answers(request)
+	}}
+	if _, err := Run(context.Background(), Input{Query: "handler"}, evaluator, reader); err != nil {
+		t.Fatal(err)
+	}
+	if most == 0 || most > MaxQuestionsPerRequest {
+		t.Fatalf("largest request had %d questions, limit %d", most, MaxQuestionsPerRequest)
 	}
 }
 

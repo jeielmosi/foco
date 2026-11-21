@@ -3,15 +3,18 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -77,6 +80,33 @@ type Client struct {
 	requests   int
 	authFailed bool
 	cooldown   time.Time
+
+	memoMu sync.Mutex
+	memo   map[memoKey]*memoCall
+	hits   int
+
+	prefetchSlots chan struct{}
+	prefetchOff   bool
+
+	connected chan struct{}
+	dialing   sync.Once
+	leading   atomic.Bool
+}
+
+// pooledClient returns an HTTP client whose connection pool can keep one idle
+// connection per concurrent request. http.DefaultClient keeps only two idle
+// connections per host, so a search running 32 requests at a time would close
+// and re-handshake (TCP + TLS) most connections after every response.
+func pooledClient(concurrency int) *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultClient
+	}
+	transport := base.Clone()
+	transport.MaxIdleConns = max(transport.MaxIdleConns, 2*concurrency)
+	transport.MaxIdleConnsPerHost = concurrency
+	transport.ForceAttemptHTTP2 = true
+	return &http.Client{Transport: transport}
 }
 
 func New(profile config.Profile, apiKey string, options Options) *Client {
@@ -94,7 +124,7 @@ func New(profile config.Profile, apiKey string, options Options) *Client {
 	}
 	httpClient := options.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = pooledClient(concurrency)
 	}
 	now := options.Now
 	if now == nil {
@@ -105,6 +135,8 @@ func New(profile config.Profile, apiKey string, options Options) *Client {
 		httpClient: httpClient, timeout: timeout,
 		requestLimit: requestLimit, now: now, sleep: options.Sleep,
 		slots: make(chan struct{}, concurrency), authDone: make(chan struct{}),
+		prefetchSlots: make(chan struct{}, max(1, concurrency/2)),
+		connected:     make(chan struct{}),
 	}
 	return client
 }
@@ -115,6 +147,29 @@ func (c *Client) Requests() int {
 	return c.requests
 }
 
+func (c *Client) CacheHits() int {
+	c.memoMu.Lock()
+	defer c.memoMu.Unlock()
+	return c.hits
+}
+
+type memoKey struct {
+	body       [sha256.Size]byte
+	navigation bool
+}
+
+type memoCall struct {
+	done   chan struct{}
+	scores map[string]float64
+	ok     bool
+}
+
+// Evaluate sends request to the decision endpoint. Within one client (one
+// search), an identical request body is sent at most once at a time and a
+// successful answer is reused: a search often asks the same question twice,
+// for example when a navigation probe and the later source selection score the
+// same file windows. Nothing is persisted, and failures are never reused; a
+// caller that waited on a failed identical request makes its own attempt.
 func (c *Client) Evaluate(ctx context.Context, request Request, options EvalOptions) (map[string]float64, error) {
 	if c.schema == nil {
 		return nil, &Failure{Kind: enums.FailureProvider, Message: "Unsupported API schema."}
@@ -123,6 +178,130 @@ func (c *Client) Evaluate(ctx context.Context, request Request, options EvalOpti
 	if err != nil {
 		return nil, &Failure{Kind: enums.FailureProvider, Message: "Invalid evaluation request."}
 	}
+	key := memoKey{body: sha256.Sum256(body), navigation: options.Navigation}
+	for {
+		c.memoMu.Lock()
+		if c.memo == nil {
+			c.memo = map[memoKey]*memoCall{}
+		}
+		call, found := c.memo[key]
+		if !found {
+			call = &memoCall{done: make(chan struct{})}
+			c.memo[key] = call
+			c.memoMu.Unlock()
+			scores, err := c.evaluate(ctx, body, request, options)
+			c.memoMu.Lock()
+			if err == nil {
+				call.scores, call.ok = scores, true
+			} else {
+				delete(c.memo, key)
+			}
+			c.memoMu.Unlock()
+			close(call.done)
+			return copyScores(scores), err
+		}
+		c.memoMu.Unlock()
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			if failure := c.interruption(ctx); failure != nil {
+				return nil, failure
+			}
+			return nil, &Failure{Kind: enums.FailureCancelled, Message: "API evaluation cancelled."}
+		}
+		if call.ok {
+			c.memoMu.Lock()
+			c.hits++
+			c.memoMu.Unlock()
+			return copyScores(call.scores), nil
+		}
+	}
+}
+
+// Prefetch sends request ahead of need so a later identical Evaluate is
+// answered from memory. It never retries and holds at most half of the
+// concurrency slots, so foreground requests always find room. It does nothing
+// once half the request limit is used, while the provider asks to back off,
+// or after any 429, so speculation can neither exhaust the request budget nor
+// add pressure to a rate-limited provider.
+func (c *Client) Prefetch(ctx context.Context, request Request) {
+	if c.schema == nil {
+		return
+	}
+	body, err := c.schema.marshalRequest(c.profile.Model, request)
+	if err != nil {
+		return
+	}
+	key := memoKey{body: sha256.Sum256(body)}
+	c.memoMu.Lock()
+	_, found := c.memo[key]
+	c.memoMu.Unlock()
+	if found {
+		return
+	}
+	select {
+	case c.prefetchSlots <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-c.prefetchSlots }()
+	if !c.prefetchAllowed() {
+		return
+	}
+	c.memoMu.Lock()
+	if c.memo == nil {
+		c.memo = map[memoKey]*memoCall{}
+	}
+	if _, found := c.memo[key]; found {
+		c.memoMu.Unlock()
+		return
+	}
+	call := &memoCall{done: make(chan struct{})}
+	c.memo[key] = call
+	c.memoMu.Unlock()
+	scores, ok := c.prefetchOnce(ctx, body, request)
+	c.memoMu.Lock()
+	if ok {
+		call.scores, call.ok = scores, true
+	} else {
+		delete(c.memo, key)
+	}
+	c.memoMu.Unlock()
+	close(call.done)
+}
+
+func (c *Client) prefetchAllowed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.prefetchOff && !c.authFailed && c.requests < c.requestLimit/2 && !c.cooldown.After(c.now())
+}
+
+func (c *Client) prefetchOnce(ctx context.Context, body []byte, request Request) (map[string]float64, bool) {
+	if c.assertActive(ctx) != nil || c.acquire(ctx) != nil {
+		return nil, false
+	}
+	scores, failure, _, status := c.attempt(ctx, body, request)
+	c.release()
+	if status == http.StatusTooManyRequests {
+		c.mu.Lock()
+		c.prefetchOff = true
+		c.mu.Unlock()
+	}
+	return scores, failure == nil
+}
+
+func copyScores(scores map[string]float64) map[string]float64 {
+	if scores == nil {
+		return nil
+	}
+	out := make(map[string]float64, len(scores))
+	for key, value := range scores {
+		out[key] = value
+	}
+	return out
+}
+
+func (c *Client) evaluate(ctx context.Context, body []byte, request Request, options EvalOptions) (map[string]float64, error) {
 	multiple := len(request.Questions) > 1
 	attemptLimit := 2
 	if options.Navigation && multiple {
@@ -167,18 +346,31 @@ func (c *Client) attempt(ctx context.Context, body []byte, request Request) (map
 	if failure := c.waitForCapacity(ctx); failure != nil {
 		return nil, failure, false, 0
 	}
-	if !c.takeRequest() {
-		return nil, &Failure{Kind: enums.FailureRequestLimit, Message: "The request limit for this search has been reached."}, false, 0
-	}
 	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	// Wait for the shared connection before charging the request budget, so a
+	// request that never leaves (cancellation, authentication failure) is not
+	// counted.
+	requestContext, err := c.awaitConnection(requestContext)
+	if err != nil {
+		if failure := c.interruption(ctx); failure != nil {
+			return nil, failure, false, 0
+		}
+		return nil, &Failure{Kind: enums.FailureCancelled, Message: "API evaluation cancelled."}, false, 0
+	}
+	if !c.takeRequest() {
+		c.markConnected()
+		return nil, &Failure{Kind: enums.FailureRequestLimit, Message: "The request limit for this search has been reached."}, false, 0
+	}
 	httpRequest, err := http.NewRequestWithContext(requestContext, http.MethodPost, c.profile.Endpoint, bytes.NewReader(body))
 	if err != nil {
+		c.markConnected()
 		return nil, &Failure{Kind: enums.FailureProvider, Message: "Invalid API endpoint."}, false, 0
 	}
 	c.schema.setAuthentication(httpRequest, c.apiKey)
 	httpRequest.Header.Set("Content-Type", "application/json")
 	response, err := c.httpClient.Do(httpRequest)
+	c.markConnected()
 	if err != nil {
 		if failure := c.interruption(ctx); failure != nil {
 			return nil, failure, false, 0
@@ -222,6 +414,30 @@ func (c *Client) attempt(ctx context.Context, body []byte, request Request) (map
 	}
 	return scores, nil, false, response.StatusCode
 }
+
+// awaitConnection lets the first request of a search open the provider
+// connection alone. Every other request waits until that connection exists,
+// so with HTTP/2 the first burst of up to --concurrency requests multiplexes
+// over one connection instead of each dialing and handshaking its own. With
+// HTTP/1.1 the waiters then dial as before, having waited only for one
+// connection setup that they would have paid themselves.
+func (c *Client) awaitConnection(ctx context.Context) (context.Context, error) {
+	if c.leading.CompareAndSwap(false, true) {
+		return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) { c.markConnected() },
+		}), nil
+	}
+	select {
+	case <-c.connected:
+		return ctx, nil
+	case <-ctx.Done():
+		return ctx, ctx.Err()
+	case <-c.authDone:
+		return ctx, errors.New("authentication failed")
+	}
+}
+
+func (c *Client) markConnected() { c.dialing.Do(func() { close(c.connected) }) }
 
 func (c *Client) waitForCapacity(ctx context.Context) *Failure {
 	for {

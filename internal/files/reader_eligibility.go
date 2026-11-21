@@ -28,7 +28,11 @@ func (r *Reader) decide(ctx context.Context, path string, final bool, allowMissi
 	if err != nil {
 		return Decision{}, err
 	}
-	absolute = resolveAncestors(filepath.Clean(absolute))
+	absolute = filepath.Clean(absolute)
+	parentsChecked := r.plainParents(absolute)
+	if !parentsChecked {
+		absolute = resolveAncestors(absolute)
+	}
 	if !inside(r.root, absolute) {
 		real, err := filepath.EvalSymlinks(absolute)
 		if err != nil || real != r.root {
@@ -109,7 +113,7 @@ func (r *Reader) decide(ctx context.Context, path string, final bool, allowMissi
 			return Decision{Path: absolute, Reason: fileTypeReason(category), Info: info}, nil
 		}
 	}
-	if !info.IsDir() {
+	if !info.IsDir() && !parentsChecked {
 		for i := range parts {
 			if i == len(parts)-1 {
 				break
@@ -122,6 +126,33 @@ func (r *Reader) decide(ctx context.Context, path string, final bool, allowMissi
 		}
 	}
 	return Decision{Path: absolute, Eligible: true, Info: info}, nil
+}
+
+// plainParents reports whether every directory between the root and path is
+// a real directory rather than a symlink. The root was resolved when the
+// reader was created, so for such a path resolving symlinks would return the
+// path unchanged; checking only the components below the root skips walking
+// every ancestor up to / on each call. Anything else (a symlinked or missing
+// parent, a path outside the root) returns false and takes the full
+// resolution path.
+func (r *Reader) plainParents(path string) bool {
+	if path == r.root || !inside(r.root, path) {
+		return false
+	}
+	rel, err := filepath.Rel(r.root, path)
+	if err != nil {
+		return false
+	}
+	parts := strings.Split(rel, string(filepath.Separator))
+	current := r.root
+	for _, part := range parts[:len(parts)-1] {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil || !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 func resolveAncestors(path string) string {

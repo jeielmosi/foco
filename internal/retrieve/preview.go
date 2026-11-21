@@ -130,7 +130,10 @@ func previewFile(snapshot files.Snapshot) *requests.FilePreview {
 	return preview
 }
 
-func withDirectoryContent(ctx context.Context, reader Reader, item requests.NavigationItem, issue func(enums.RetrievalIssueCode), report func(string, *files.Snapshot)) (requests.NavigationItem, []Donor) {
+// withDirectoryContent samples the file children of a directory item. Reads
+// found in prefetched (keyed by absolute path) are used as is; the rest are
+// read concurrently here.
+func withDirectoryContent(ctx context.Context, reader Reader, item requests.NavigationItem, issue func(enums.RetrievalIssueCode), report func(string, *files.Snapshot), prefetched map[string]files.SnapshotResult) (requests.NavigationItem, []Donor) {
 	if item.ChildPreview == nil {
 		return item, nil
 	}
@@ -150,9 +153,24 @@ func withDirectoryContent(ctx context.Context, reader Reader, item requests.Navi
 	if perFile < 80 {
 		perFile = 80
 	}
-	for _, child := range children {
+	results := make([]files.SnapshotResult, len(children))
+	missing := []string{}
+	missingAt := []int{}
+	for index, child := range children {
+		full := absPath(reader.Root(), path.Join(item.Path, child.Name))
+		if result, ok := prefetched[full]; ok {
+			results[index] = result
+			continue
+		}
+		missing = append(missing, full)
+		missingAt = append(missingAt, index)
+	}
+	for position, result := range readSnapshots(ctx, reader, missing) {
+		results[missingAt[position]] = result
+	}
+	for index, child := range children {
 		relative := path.Join(item.Path, child.Name)
-		result := reader.ReadSnapshotReuse(ctx, absPath(reader.Root(), relative))
+		result := results[index]
 		if result.Status == enums.SnapshotStatusIssue {
 			if issue != nil {
 				issue(retrievalIssueForFileIssue(result.Issue))

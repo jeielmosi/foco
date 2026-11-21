@@ -165,6 +165,7 @@ func TestWithDirectoryContentSamplesFilesAndReportsSnapshots(t *testing.T) {
 		func(relative string, snapshot *files.Snapshot) {
 			reported[relative] = snapshot.ContentHash
 		},
+		nil,
 	)
 	if got.Path != "pkg" || got.Kind != enums.NavigationKindDirectory || got.ChildPreview == nil {
 		t.Fatalf("item = %+v", got)
@@ -212,7 +213,7 @@ func TestWithDirectoryContentMarksLongSamplesTruncated(t *testing.T) {
 		}},
 	}
 	got, donors := withDirectoryContent(
-		context.Background(), reader, item, func(enums.RetrievalIssueCode) {}, nil,
+		context.Background(), reader, item, func(enums.RetrievalIssueCode) {}, nil, nil,
 	)
 	if len(donors) != 1 || len(got.ChildPreview.ContentSamples) != 1 {
 		t.Fatalf("donors = %+v, preview = %+v", donors, got.ChildPreview)
@@ -247,7 +248,7 @@ func TestWithDirectoryContentCapsSampleJSON(t *testing.T) {
 			{Name: "quotes.ts", Kind: enums.NavigationKindFile},
 		}},
 	}
-	got, _ := withDirectoryContent(context.Background(), reader, item, func(enums.RetrievalIssueCode) {}, nil)
+	got, _ := withDirectoryContent(context.Background(), reader, item, func(enums.RetrievalIssueCode) {}, nil, nil)
 	blob, err := jsonMarshal(got.ChildPreview)
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +263,7 @@ func TestWithDirectoryContentCapsSampleJSON(t *testing.T) {
 
 func TestWithDirectoryContentWithoutPreviewIsUnchanged(t *testing.T) {
 	item := requests.NavigationItem{Path: "pkg", Kind: enums.NavigationKindDirectory}
-	got, donors := withDirectoryContent(context.Background(), nil, item, func(enums.RetrievalIssueCode) {}, nil)
+	got, donors := withDirectoryContent(context.Background(), nil, item, func(enums.RetrievalIssueCode) {}, nil, nil)
 	if got.Path != "pkg" || got.ChildPreview != nil || donors != nil {
 		t.Fatalf("item = %+v, donors = %+v", got, donors)
 	}
@@ -279,7 +280,7 @@ func TestWithDirectoryContentReportsChildReadIssue(t *testing.T) {
 	}
 	got, donors := withDirectoryContent(
 		context.Background(), reader, item,
-		func(kind enums.RetrievalIssueCode) { issues = append(issues, kind) }, nil,
+		func(kind enums.RetrievalIssueCode) { issues = append(issues, kind) }, nil, nil,
 	)
 	if len(issues) != 1 || issues[0] != enums.IssueCodeChanged {
 		t.Fatalf("issues = %v", issues)
@@ -306,7 +307,7 @@ func TestWithDirectoryContentKeepsSamplesValidUTF8(t *testing.T) {
 			{Name: "big.ts", Kind: enums.NavigationKindFile},
 		}},
 	}
-	got, _ := withDirectoryContent(context.Background(), reader, item, func(enums.RetrievalIssueCode) {}, nil)
+	got, _ := withDirectoryContent(context.Background(), reader, item, func(enums.RetrievalIssueCode) {}, nil, nil)
 	samples := got.ChildPreview.ContentSamples
 	if len(samples) != 1 || !samples[0].Truncated {
 		t.Fatalf("samples = %+v", samples)

@@ -48,6 +48,10 @@ func TestHelpCoversPhaseFourSurface(t *testing.T) {
 		"--exclude PATTERN",
 		"--no-cache",
 		"--concurrency N",
+		"--parallel N",
+		"--nav-batch-size N",
+		"--nav-batch-bytes N",
+		"scan PATH...",
 		"File categories: code, config, docs, data, audio, video, archives, logs, temp, unknown.",
 		"130 interrupted.",
 	} {

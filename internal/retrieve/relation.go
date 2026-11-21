@@ -3,6 +3,7 @@ package retrieve
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -95,6 +96,29 @@ func findAnchor(ctx context.Context, reader Reader, root string, ordered []candi
 	return nil, Donor{}, false
 }
 
+// prefetchDirectoryContent reads the sampled file children of every pruned
+// directory in one concurrent batch, so many small directories do not each
+// wait for their own handful of reads.
+func prefetchDirectoryContent(ctx context.Context, reader Reader, paths []string, pruned map[string]requests.NavigationItem) map[string]files.SnapshotResult {
+	children := []string{}
+	for _, directory := range paths {
+		item := pruned[directory]
+		if item.ChildPreview == nil {
+			continue
+		}
+		for _, child := range item.ChildPreview.Entries {
+			if child.Kind == enums.NavigationKindFile {
+				children = append(children, absPath(reader.Root(), path.Join(directory, child.Name)))
+			}
+		}
+	}
+	out := make(map[string]files.SnapshotResult, len(children))
+	for index, result := range readSnapshots(ctx, reader, children) {
+		out[children[index]] = result
+	}
+	return out
+}
+
 func reconsider(
 	ctx context.Context, reader Reader, navigator *navigator, root string,
 	pruned map[string]requests.NavigationItem, anchor *requests.RelationAnchor,
@@ -108,11 +132,12 @@ func reconsider(
 		paths = append(paths, path)
 	}
 	sort.Strings(paths)
+	prefetched := prefetchDirectoryContent(ctx, reader, paths, pruned)
 	items := make([]requests.NavigationItem, 0, len(paths))
 	for _, path := range paths {
 		item := pruned[path]
 		var sampled []Donor
-		item, sampled = withDirectoryContent(ctx, reader, item, issue, report)
+		item, sampled = withDirectoryContent(ctx, reader, item, issue, report, prefetched)
 		if donors != nil {
 			donors[path] = sampled
 		}

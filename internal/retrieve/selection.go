@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 
 	"foco/internal/enums"
 	"foco/internal/files"
@@ -85,13 +86,13 @@ func buildWindows(index *textIndex) []window {
 	return out
 }
 
-func groupWindows(index *textIndex, windows []window) [][]window {
+func groupWindows(index *textIndex, windows []window, limit int) [][]window {
 	var groups [][]window
 	current := []window{}
 	for _, entry := range windows {
 		if len(current) > 0 {
 			byteLength := index.offsets[entry.Range.EndLine] - index.offsets[current[0].Range.StartLine-1]
-			if len(current) >= NavigationBatchSize || byteLength > 42000 {
+			if len(current) >= limit || byteLength > SelectionGroupSourceBytes {
 				groups = append(groups, current)
 				current = []window{}
 			}
@@ -355,7 +356,12 @@ func selectFile(
 		return selectionResult{File: base, Issues: issues.list()}, nil
 	}
 	index := newTextIndex(snapshot.Source)
-	groups := groupWindows(index, buildWindows(index))
+	// Each window asks q and scope, plus ref when evidence is sent.
+	perWindow := 2
+	if prepare != nil {
+		perWindow = 3
+	}
+	groups := groupWindows(index, buildWindows(index), min(SelectionBatchSize, MaxQuestionsPerRequest/perWindow))
 	groupCount := len(groups)
 	queue := append([][]window{}, groups...)
 	selected := []span{}
@@ -367,6 +373,17 @@ func selectFile(
 	validAnswer := func(value float64) bool {
 		return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= 1
 	}
+	// Window groups are independent questions: preparing a request never
+	// depends on an earlier answer. Prepare every request in order first, send
+	// them concurrently, then apply the answers in the original order so the
+	// result matches a sequential evaluation.
+	type job struct {
+		group    []window
+		request  provider.Request
+		evidence *[]requests.Evidence
+	}
+	jobs := []job{}
+	terminal := enums.UnknownRetrievalIssueCode
 	for len(queue) > 0 && !omitted && ctx.Err() == nil {
 		group := queue[0]
 		queue = queue[1:]
@@ -379,12 +396,12 @@ func selectFile(
 				if kind == enums.IssueCodeInterrupted {
 					interrupted = true
 				}
-				issues.add(kind)
+				terminal = kind
 				omitted = true
 				break
 			}
 			if !ok {
-				issues.add(enums.IssueCodeChanged)
+				terminal = enums.IssueCodeChanged
 				omitted = true
 				break
 			}
@@ -397,7 +414,11 @@ func selectFile(
 			evidencePointer = &evidence
 		}
 		request := requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group), declarationsFor(group), evidencePointer)
-		if len(group) > 1 && stateSize(request.State) > 80_000 {
+		// Split an oversized group only when a single window would fit: when the
+		// shared parts (evidence, opening context) alone exceed the budget,
+		// splitting multiplies requests without making any of them fit.
+		if len(group) > 1 && stateSize(request.State) > SelectionStateBytes &&
+			stateSize(requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group[:1]), declarationsFor(group[:1]), evidencePointer).State) <= SelectionStateBytes {
 			middle := (len(group) + 1) / 2
 			queue = append([][]window{group[:middle], group[middle:]}, queue...)
 			groupCount++
@@ -409,12 +430,32 @@ func selectFile(
 				if kind == enums.IssueCodeInterrupted {
 					interrupted = true
 				}
-				issues.add(kind)
+				terminal = kind
 				omitted = true
 				break
 			}
 		}
-		answers, err := evaluator.Evaluate(ctx, request, provider.EvalOptions{})
+		jobs = append(jobs, job{group: group, request: request, evidence: evidencePointer})
+	}
+	answered := make([]map[string]float64, len(jobs))
+	failed := make([]error, len(jobs))
+	if len(jobs) == 1 {
+		answered[0], failed[0] = evaluator.Evaluate(ctx, jobs[0].request, provider.EvalOptions{})
+	} else {
+		var wait sync.WaitGroup
+		for position := range jobs {
+			wait.Add(1)
+			go func() {
+				defer wait.Done()
+				answered[position], failed[position] = evaluator.Evaluate(ctx, jobs[position].request, provider.EvalOptions{})
+			}()
+		}
+		wait.Wait()
+	}
+	for position, current := range jobs {
+		group := current.group
+		evidencePointer := current.evidence
+		answers, err := answered[position], failed[position]
 		if err != nil {
 			failure := asFailure(err)
 			kind := retrievalIssueForProviderFailure(failure.Kind)
@@ -480,6 +521,9 @@ func selectFile(
 				selectedWindows = append(selectedWindows, entry)
 			}
 		}
+	}
+	if terminal != enums.UnknownRetrievalIssueCode {
+		issues.add(terminal)
 	}
 	if ctx.Err() != nil && !interrupted {
 		issues.add(enums.IssueCodeInterrupted)

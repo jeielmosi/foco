@@ -27,6 +27,8 @@ Root defaults to the current directory; use -- before a root beginning with -.
 Commands:
   auth            Choose an API schema and save its endpoint credentials
   doctor          Verify API access using a synthetic question
+  scan PATH...    Report the secrets foco would exclude, with byte ranges;
+                  --json prints one JSON object per finding. Exit 1 if any.
   skill           Install the agent skill via npx skills
   --help, -h      Show usage
   --version       Show the installed version
@@ -62,6 +64,9 @@ Search options:
   --exclude PATTERN       Skip paths matching a gitignore pattern; repeatable
   --no-cache              Disable cache reads and writes
   --concurrency N         Limit in-flight API requests; try 1–4 on slow networks
+  --parallel N            CPU cores to use; 0 means all (default: half)
+  --nav-batch-size N      Max paths per navigation request, 1–100 (default: 100)
+  --nav-batch-bytes N     Max navigation request bytes, 38000–64000 (default: 38000)
 
 File categories: code, config, docs, data, audio, video, archives, logs, temp, unknown. Classification uses filenames;
 extensionless scripts with a recognised code shebang (Python, Node, Bun, tsx,
@@ -173,6 +178,8 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return skillCode
 	case KindSearch:
 		return runSearch(ctx, command.Search, out, stderr)
+	case KindScan:
+		return runScan(ctx, command.Scan, out, stderr)
 	default:
 		fmt.Fprintln(out, "Command failed. Check the root, permissions, credentials, and network.")
 		return 1

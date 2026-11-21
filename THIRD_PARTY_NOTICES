@@ -1,0 +1,44 @@
+Third-party notices for foco
+
+foco includes or links the software below. Each entry names the component,
+the version foco builds with, its license, and where the full license text is
+kept in this repository.
+
+github.com/betterleaks/betterleaks v1.10.1
+License: MIT
+License text: licenses/github-com-betterleaks-betterleaks.txt
+
+github.com/bmatcuk/doublestar/v4 v4.10.4
+License: MIT
+License text: licenses/github-com-bmatcuk-doublestar-v4.txt
+
+github.com/cloudflare/ahocorasick v0.0.0-20240916140611-054963ec9396
+License: BSD-3-Clause
+License text: licenses/github-com-cloudflare-ahocorasick.txt
+
+github.com/go-git/go-git/v5 v5.19.3
+License: Apache-2.0
+License text: licenses/github-com-go-git-go-git-v5.txt
+
+github.com/praetorian-inc/titus v1.3.0
+License: Apache-2.0
+License text: licenses/github-com-praetorian-inc-titus.txt
+
+github.com/spf13/cobra v1.10.2
+License: Apache-2.0
+License text: licenses/github-com-spf13-cobra.txt
+
+gopkg.in/yaml.v3 v3.0.1
+License: MIT and Apache-2.0
+License text: licenses/gopkg-in-yaml-v3.txt
+
+shhgit (github.com/eth0izzle/shhgit) at commit bac0c7d39519203d230b6c9a2c6e3eba18346aba
+Used for: the credential-bearing path catalog in internal/detect/catalog/paths.yaml
+License: MIT
+License text: licenses/github-com-eth0izzle-shhgit.txt
+
+Vectorscan (libhs), a fork of Intel Hyperscan
+Used for: the accelerated Titus matcher; `make install` copies the libhs the
+binary was linked against to $PREFIX/lib/foco
+License: BSD-3-Clause
+License text: licenses/vectorscan.txt

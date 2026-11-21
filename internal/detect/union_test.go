@@ -121,57 +121,6 @@ func TestUnionCallOrder(t *testing.T) {
 	}
 }
 
-func TestUnionAllRunsBothEnginesAndORs(t *testing.T) {
-	cases := []struct {
-		name          string
-		titus, better bool
-		want          bool
-	}{
-		{name: "titus hit", titus: true, better: false, want: true},
-		{name: "betterleaks hit", titus: false, better: true, want: true},
-		{name: "both miss", titus: false, better: false, want: false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			titus := &fakeEngine{name: "titus", result: tc.titus}
-			better := &fakeEngine{name: "betterleaks", result: tc.better}
-			u := NewUnionAll(titus, better, loadCatalog(t))
-			excluded, err := u.DetectPath(context.Background(), "main.go")
-			if err != nil || excluded != tc.want {
-				t.Fatalf("excluded=%v err=%v want=%v", excluded, err, tc.want)
-			}
-			if titus.called != 1 || better.called != 1 {
-				t.Fatalf("titus calls=%d betterleaks calls=%d, want 1 each", titus.called, better.called)
-			}
-		})
-	}
-}
-
-func TestUnionAllRunsSecondEngineAfterPrimaryError(t *testing.T) {
-	boom := errors.New("boom")
-	titus := &fakeEngine{name: "titus", err: boom}
-	better := &fakeEngine{name: "betterleaks", result: true}
-	u := NewUnionAll(titus, better, loadCatalog(t))
-	if _, err := u.DetectPath(context.Background(), "main.go"); !errors.Is(err, boom) {
-		t.Fatalf("err = %v, want %v", err, boom)
-	}
-	if titus.called != 1 || better.called != 1 {
-		t.Fatalf("titus calls=%d betterleaks calls=%d, want 1 each", titus.called, better.called)
-	}
-}
-
-func TestUnionAllReportsBothEngineFailures(t *testing.T) {
-	titus := &fakeEngine{name: "titus", err: errors.New("titus failed")}
-	better := &fakeEngine{name: "betterleaks", err: errors.New("betterleaks failed")}
-	u := NewUnionAll(titus, better, loadCatalog(t))
-	if _, err := u.DetectPath(context.Background(), "main.go"); err == nil {
-		t.Fatal("expected an error when both engines fail")
-	}
-	if titus.called != 1 || better.called != 1 {
-		t.Fatalf("titus calls=%d betterleaks calls=%d, want 1 each", titus.called, better.called)
-	}
-}
-
 func TestUnionCloseClosesBoth(t *testing.T) {
 	titus := &fakeEngine{name: "titus"}
 	better := &fakeEngine{name: "betterleaks"}

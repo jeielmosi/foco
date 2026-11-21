@@ -251,6 +251,33 @@ func TestSymlinkedRoot(t *testing.T) {
 	}
 }
 
+func TestSymlinkedParentDirectories(t *testing.T) {
+	root := writeTree(t, map[string]string{"src/real/main.go": "package main\n"})
+	outside := writeTree(t, map[string]string{"secret/key.go": "package secret\n"})
+	if err := os.Symlink(filepath.Join(outside, "secret"), filepath.Join(root, "src", "escape")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "src", "real"), filepath.Join(root, "src", "alias")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	reader, err := New(root, DefaultPolicy(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escaped, err := reader.Eligibility(context.Background(), filepath.Join(root, "src", "escape", "key.go"))
+	if err != nil || escaped.Eligible || escaped.Reason != enums.FileReasonOutsideRoot {
+		t.Fatalf("file under a symlink leaving the root: %+v, %v", escaped, err)
+	}
+	aliased, err := reader.Eligibility(context.Background(), filepath.Join(root, "src", "alias", "main.go"))
+	if err != nil || !aliased.Eligible || aliased.Path != filepath.Join(reader.Root(), "src", "real", "main.go") {
+		t.Fatalf("file under a symlink inside the root: %+v, %v", aliased, err)
+	}
+	plain, err := reader.Eligibility(context.Background(), filepath.Join(root, "src", "real", "main.go"))
+	if err != nil || !plain.Eligible {
+		t.Fatalf("plain file: %+v, %v", plain, err)
+	}
+}
+
 func TestSymlinkedFileStillDetected(t *testing.T) {
 	root := writeTree(t, map[string]string{"real.txt": "x"})
 	outside := writeTree(t, map[string]string{"target.txt": "x"})

@@ -31,7 +31,7 @@ ifneq ($(VECTORSCAN_PREFIX),)
 export PKG_CONFIG_PATH := $(VECTORSCAN_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
 endif
 
-.PHONY: all build build-pure install install-pure uninstall deps check-vectorscan verify-vectorscan check ci fmt fmt-check vet test test-race test-vectorscan test-race-vectorscan tidy clean help
+.PHONY: all build build-pure install install-pure uninstall deps check-vectorscan verify-vectorscan check ci fmt fmt-check vet test test-race test-vectorscan test-vectorscan-if-available test-race-vectorscan tidy clean help
 
 all: check build
 
@@ -49,11 +49,12 @@ install-pure:
 
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/foco"
+	rm -rf "$(DESTDIR)$(dir $(BINDIR))lib/foco"
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
 
-check: fmt-check vet test
+check: fmt-check vet test test-vectorscan-if-available
 
 ci: check test-race verify-vectorscan build
 
@@ -77,14 +78,20 @@ test:
 test-race:
 	CGO_ENABLED=1 $(GOENV) $(GO) test -race -count=1 $(PKG)
 
-test-vectorscan: check-vectorscan
-	CGO_ENABLED=1 $(GOENV) $(GO) test $(TAGS_FLAG) $(PKG)
+VECTORSCAN_TEST = FOCO_TAGS="vectorscan" GO="$(GO)" GOTOOLCHAIN="$(GOTOOLCHAIN)" sh scripts/build.sh test
 
-test-race-vectorscan: check-vectorscan
-	CGO_ENABLED=1 $(GOENV) $(GO) test -race $(TAGS_FLAG) $(PKG)
+test-vectorscan:
+	FOCO_TEST_FLAGS="-count=1" FOCO_TEST_PKGS="$(PKG)" $(VECTORSCAN_TEST)
 
-verify-vectorscan: check-vectorscan
-	CGO_ENABLED=1 $(GOENV) $(GO) test -tags "vectorscan" -count=1 -run TestTitusDetectsKnownToken -v ./internal/detect
+test-vectorscan-if-available:
+	@FOCO_TEST_FLAGS="-count=1" FOCO_TEST_PKGS="$(PKG)" $(VECTORSCAN_TEST); \
+	status=$$?; [ $$status -eq 0 ] || [ $$status -eq 3 ]
+
+test-race-vectorscan:
+	FOCO_TEST_FLAGS="-race -count=1" FOCO_TEST_PKGS="$(PKG)" $(VECTORSCAN_TEST)
+
+verify-vectorscan:
+	FOCO_TEST_FLAGS="-count=1 -run TestTitusDetectsKnownToken -v" FOCO_TEST_PKGS="./internal/detect" $(VECTORSCAN_TEST)
 
 tidy:
 	$(GOENV) $(GO) mod tidy
@@ -109,7 +116,7 @@ help:
 		'make deps                   Install pkg-config + Hyperscan/Vectorscan' \
 		'make check-vectorscan       Verify pkg-config can find libhs' \
 		'make verify-vectorscan      Prove Titus compiles rules with Hyperscan/Vectorscan' \
-		'make check                  gofmt check + go vet + pure-Go tests' \
+		'make check                  gofmt check + go vet + pure-Go tests + Vectorscan tests when libhs is available' \
 		'make ci                     check + race + vectorscan verification + build' \
 		'make fmt                    Format all Go files' \
 		'make test                   Pure-Go test suite' \

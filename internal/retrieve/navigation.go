@@ -41,7 +41,7 @@ type navigator struct {
 	issues    *issueSet
 	donors    func(requests.NavigationItem) []Donor
 	validate  func(context.Context, []Donor) bool
-	probe     func(context.Context, string) bool
+	probe     func(context.Context, string) probeOutcome
 
 	mu        sync.Mutex
 	bytesSeen int
@@ -52,17 +52,21 @@ type navigator struct {
 	stopped   bool
 	probes    map[string]struct{}
 	settle    sync.Mutex
+
+	batchSize  int
+	batchBytes int
 }
 
 func newNavigator(
 	ctx context.Context, query string, evaluator Evaluator, issues *issueSet,
 	donors func(requests.NavigationItem) []Donor,
 	validate func(context.Context, []Donor) bool,
-	probe func(context.Context, string) bool,
+	probe func(context.Context, string) probeOutcome,
 ) *navigator {
 	return &navigator{
 		ctx: ctx, query: query, evaluator: evaluator, issues: issues,
 		donors: donors, validate: validate, probe: probe, probes: map[string]struct{}{},
+		batchSize: NavigationBatchSize, batchBytes: NavigationBatchBytes,
 	}
 }
 
@@ -74,27 +78,27 @@ func requestSize(request provider.Request) int {
 	return len(blob)
 }
 
-func groupNavigation(query string, items []requests.NavigationItem, anchor *requests.RelationAnchor, issue func(enums.RetrievalIssueCode)) [][]requests.NavigationItem {
+func groupNavigation(query string, items []requests.NavigationItem, anchor *requests.RelationAnchor, batchSize, batchBytes int, issue func(enums.RetrievalIssueCode)) [][]requests.NavigationItem {
 	var groups [][]requests.NavigationItem
 	current := []requests.NavigationItem{}
+	sizer := requests.NewNavigationSizer(query, anchor)
 	flush := func() {
 		if len(current) > 0 {
 			groups = append(groups, current)
 			current = []requests.NavigationItem{}
+			sizer.Reset()
 		}
 	}
 	for _, item := range items {
-		if requestSize(requests.NavigationRequest(query, []requests.NavigationItem{item}, anchor)) > NavigationBatchBytes {
+		if sizer.Empty()+sizer.Entry(0, item) > batchBytes {
 			issue(enums.IssueCodeRequestSize)
 			continue
 		}
-		if len(current) > 0 {
-			candidate := append(append([]requests.NavigationItem{}, current...), item)
-			if len(current) >= NavigationBatchSize ||
-				requestSize(requests.NavigationRequest(query, candidate, anchor)) > NavigationBatchBytes {
-				flush()
-			}
+		if len(current) > 0 && (len(current) >= min(batchSize, MaxQuestionsPerRequest) ||
+			sizer.With(sizer.Entry(len(current), item)) > batchBytes) {
+			flush()
 		}
+		sizer.Add(sizer.Entry(len(current), item))
 		current = append(current, item)
 	}
 	flush()
@@ -228,7 +232,7 @@ func (n *navigator) score(
 	finalChoices func() []string,
 	consume func(requests.NavigationItem, float64),
 ) error {
-	groups := groupNavigation(n.query, items, anchor, n.issues.add)
+	groups := groupNavigation(n.query, items, anchor, n.batchSize, n.batchBytes, n.issues.add)
 	for start := 0; start < len(groups); start += StageWorkers {
 		if n.issues.fatal() {
 			return nil
@@ -245,21 +249,28 @@ func (n *navigator) score(
 		}
 		wait.Wait()
 		fatal, paused := false, false
+		waveClassified := make([][]scoredItem, end-start)
 		for index := start; index < end; index++ {
 			group := groups[index]
 			outcome := outcomes[index-start]
 			classified := make([]scoredItem, 0, len(group))
-			positive, strong := 0, false
 			for offset, item := range group {
-				value, ok := outcome.scores[offset]
-				if !ok {
-					continue
+				if value, ok := outcome.scores[offset]; ok {
+					classified = append(classified, scoredItem{item: item, score: value})
 				}
-				classified = append(classified, scoredItem{item: item, score: value})
-				if value >= WeakScoreCeiling {
+			}
+			waveClassified[index-start] = classified
+		}
+		probes := n.probeWave(waveClassified)
+		for index := start; index < end; index++ {
+			outcome := outcomes[index-start]
+			classified := waveClassified[index-start]
+			positive, strong := 0, false
+			for _, entry := range classified {
+				if entry.score >= WeakScoreCeiling {
 					strong = true
 				}
-				if value > RelevanceBoundary {
+				if entry.score > RelevanceBoundary {
 					positive++
 				}
 			}
@@ -272,7 +283,7 @@ func (n *navigator) score(
 			for _, entry := range classified {
 				consume(entry.item, entry.score)
 			}
-			n.confirm(classified)
+			n.settleProbe(probes[index-start])
 			if outcome.paused {
 				paused = true
 			}
@@ -298,33 +309,89 @@ func (n *navigator) score(
 	return nil
 }
 
-func (n *navigator) confirm(items []scoredItem) {
+// probeOutcome is the result of confirming one file. apply records the
+// probe's side effects (issues) and is only called for probes the sequential
+// flow would have made.
+type probeOutcome struct {
+	confident bool
+	apply     func()
+}
+
+type plannedProbe struct {
+	path    string
+	planned bool
+	done    chan struct{}
+	outcome probeOutcome
+}
+
+// probeWave confirms the first unprobed strong file of each group in a wave.
+// Sequentially, groups are confirmed one after another until one probe makes
+// the navigator confident, with at most four probes per search. Probes never
+// depend on each other's answers, so the wave's probes start together and
+// settleProbe applies them in group order, discarding any that follow the
+// first confident one. Discarded probes cost requests, not results, and their
+// requests are the ones later source selection sends for the same file.
+func (n *navigator) probeWave(groups [][]scoredItem) []*plannedProbe {
+	planned := make([]*plannedProbe, len(groups))
 	if n.probe == nil {
+		return planned
+	}
+	n.mu.Lock()
+	if n.confident {
+		n.mu.Unlock()
+		return planned
+	}
+	taken := map[string]struct{}{}
+	budget := 4 - len(n.probes)
+	for index, items := range groups {
+		if budget <= 0 {
+			break
+		}
+		for _, entry := range items {
+			if entry.item.Kind != enums.NavigationKindFile || entry.score < WeakScoreCeiling {
+				continue
+			}
+			if _, ok := n.probes[entry.item.Path]; ok {
+				continue
+			}
+			if _, ok := taken[entry.item.Path]; ok {
+				continue
+			}
+			taken[entry.item.Path] = struct{}{}
+			planned[index] = &plannedProbe{path: entry.item.Path, planned: true, done: make(chan struct{})}
+			budget--
+			break
+		}
+	}
+	n.mu.Unlock()
+	for _, probe := range planned {
+		if probe == nil {
+			continue
+		}
+		go func() {
+			defer close(probe.done)
+			probe.outcome = n.probe(n.ctx, probe.path)
+		}()
+	}
+	return planned
+}
+
+func (n *navigator) settleProbe(probe *plannedProbe) {
+	if probe == nil {
 		return
 	}
+	<-probe.done
 	n.mu.Lock()
 	if n.confident || len(n.probes) >= 4 {
 		n.mu.Unlock()
 		return
 	}
-	path := ""
-	for _, entry := range items {
-		if entry.item.Kind != enums.NavigationKindFile || entry.score < WeakScoreCeiling {
-			continue
-		}
-		if _, ok := n.probes[entry.item.Path]; ok {
-			continue
-		}
-		path = entry.item.Path
-		break
-	}
-	if path == "" {
-		n.mu.Unlock()
-		return
-	}
-	n.probes[path] = struct{}{}
+	n.probes[probe.path] = struct{}{}
 	n.mu.Unlock()
-	if n.probe(n.ctx, path) {
+	if probe.outcome.apply != nil {
+		probe.outcome.apply()
+	}
+	if probe.outcome.confident {
 		n.mu.Lock()
 		n.confident = true
 		n.mu.Unlock()
@@ -347,7 +414,11 @@ func (n *navigator) confirmFinal(paths []string) {
 		}
 		n.probes[path] = struct{}{}
 		n.mu.Unlock()
-		if n.probe(n.ctx, path) {
+		outcome := n.probe(n.ctx, path)
+		if outcome.apply != nil {
+			outcome.apply()
+		}
+		if outcome.confident {
 			n.mu.Lock()
 			n.confident = true
 			n.mu.Unlock()

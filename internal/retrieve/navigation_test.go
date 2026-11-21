@@ -3,6 +3,7 @@ package retrieve
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -124,7 +125,7 @@ func TestNavigatorIssuesLowConfidenceBudgetOnce(t *testing.T) {
 		return map[string]float64{"q0": 0.55}, nil
 	}}
 	issues := &issueSet{counts: map[enums.RetrievalIssueCode]int{}}
-	navigator := newNavigator(context.Background(), "q", evaluator, issues, nil, nil, func(context.Context, string) bool { return false })
+	navigator := newNavigator(context.Background(), "q", evaluator, issues, nil, nil, func(context.Context, string) probeOutcome { return probeOutcome{} })
 	navigator.positive = MinimumPositiveScores
 	navigator.bytesSeen = NavigationByteBudget
 	_ = navigator.score(items, nil, func() []string { return []string{"a.ts"} }, func(requests.NavigationItem, float64) {})
@@ -146,7 +147,7 @@ func TestNavigatorBudgetResumesAfterConfirmation(t *testing.T) {
 		return map[string]float64{"q0": 0.9}, nil
 	}}
 	issues := &issueSet{counts: map[enums.RetrievalIssueCode]int{}}
-	probe := func(context.Context, string) bool { return true }
+	probe := func(context.Context, string) probeOutcome { return probeOutcome{confident: true} }
 	navigator := newNavigator(context.Background(), "q", evaluator, issues, nil, nil, probe)
 	navigator.positive = MinimumPositiveScores
 	navigator.bytesSeen = NavigationByteBudget
@@ -164,6 +165,45 @@ func TestNavigatorBudgetResumesAfterConfirmation(t *testing.T) {
 	}
 	if want := NavigationByteBudget + requestSize(requests.NavigationRequest("q", items, nil)); navigator.bytesSeen != want {
 		t.Fatalf("bytesSeen = %d, want %d", navigator.bytesSeen, want)
+	}
+}
+
+func TestNavigatorProbesWaveConcurrentlyButAppliesInOrder(t *testing.T) {
+	large := strings.Repeat("x", 30_000)
+	items := []requests.NavigationItem{
+		{Path: "a.ts", Kind: enums.NavigationKindFile, FilePreview: &requests.FilePreview{Text: large}},
+		{Path: "b.ts", Kind: enums.NavigationKindFile, FilePreview: &requests.FilePreview{Text: large}},
+		{Path: "c.ts", Kind: enums.NavigationKindFile, FilePreview: &requests.FilePreview{Text: large}},
+	}
+	if groups := groupNavigation("q", items, nil, NavigationBatchSize, NavigationBatchBytes, func(enums.RetrievalIssueCode) {}); len(groups) != 3 {
+		t.Fatalf("groups = %d, want 3", len(groups))
+	}
+	evaluator := &scriptedEvaluator{answers: func(request provider.Request) (map[string]float64, error) {
+		return map[string]float64{"q0": 0.9}, nil
+	}}
+	var mu sync.Mutex
+	started := map[string]bool{}
+	applied := []string{}
+	all := make(chan struct{})
+	probe := func(_ context.Context, path string) probeOutcome {
+		mu.Lock()
+		started[path] = true
+		if len(started) == 3 {
+			close(all)
+		}
+		mu.Unlock()
+		<-all
+		return probeOutcome{confident: path == "b.ts", apply: func() { applied = append(applied, path) }}
+	}
+	navigator := newNavigator(context.Background(), "q", evaluator, &issueSet{counts: map[enums.RetrievalIssueCode]int{}}, nil, nil, probe)
+	if err := navigator.score(items, nil, nil, func(requests.NavigationItem, float64) {}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(applied, ",") != "a.ts,b.ts" || !navigator.confident {
+		t.Fatalf("applied = %v, confident = %v", applied, navigator.confident)
+	}
+	if _, ok := navigator.probes["c.ts"]; ok || len(navigator.probes) != 2 {
+		t.Fatalf("probes = %v", navigator.probes)
 	}
 }
 
