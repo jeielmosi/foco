@@ -28,6 +28,7 @@ type settings struct {
 	WarnContext  int    `json:"warnContext"`
 	TLS          bool   `json:"tls"`
 	Tags         string `json:"tags"`
+	Cgo          bool   `json:"cgo"`
 	CPUs         int    `json:"cpus"`
 	Platform     string `json:"platform"`
 	GoVersion    string `json:"goVersion"`
@@ -103,6 +104,8 @@ func (r results) markdown(repoURL string) string {
 	engine := "pure Go"
 	if strings.Contains(s.Tags, "vectorscan") {
 		engine = "Vectorscan"
+	} else if s.Cgo {
+		engine = "cgo"
 	}
 	transport := "HTTP"
 	if s.TLS {
@@ -193,6 +196,7 @@ func verdictSummary(base, head []string) string {
 func currentSettings(suite string, runs int, options providerOptions, tags string) settings {
 	return settings{
 		Suite: suite, Runs: runs, Latency: options.Latency.String(), LatencyPerKB: options.LatencyPerKB.String(),
+		Cgo:          buildCgo || tags != "",
 		MaxQuestions: options.MaxQuestions, MaxContext: options.MaxContext, WarnContext: options.WarnContext, TLS: options.TLS, Tags: tags,
 		CPUs: runtime.NumCPU(), Platform: runtime.GOOS + "/" + runtime.GOARCH, GoVersion: runtime.Version(),
 	}

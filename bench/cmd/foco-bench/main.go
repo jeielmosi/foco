@@ -117,6 +117,7 @@ func runCommand(args []string) error {
 	headArgs := flags.String("head-args", "", "extra foco flags for the head build, space-separated")
 	runs := flags.Int("runs", 3, "timed runs per build and search")
 	tags := flags.String("tags", "", "build tags for both builds, e.g. vectorscan (needs cgo and libhs)")
+	flags.BoolVar(&buildCgo, "cgo", false, "build with cgo even without -tags (needed for tree-sitter outlines)")
 	outDir := flags.String("out", "bench/results", "directory for report.md and results.json")
 	detector := flags.Bool("detect", true, "also benchmark the secret detector alone over the suite")
 	flags.DurationVar(&provider.Latency, "latency", 300*time.Millisecond, "fake provider latency per response")

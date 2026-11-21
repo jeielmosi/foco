@@ -31,7 +31,7 @@ func git(dir string, args ...string) (string, error) {
 // The ref "." builds the current working tree, uncommitted changes included.
 func prepareBuild(label, ref, repo, cache, tags string, logf func(string, ...any)) (build, error) {
 	out := build{Label: label, Ref: ref}
-	key := sha256.Sum256([]byte(tags))
+	key := sha256.Sum256([]byte(tags + "|cgo=" + cgoSetting(tags)))
 	if ref == "." {
 		commit, err := git(repo, "rev-parse", "HEAD")
 		if err != nil {
@@ -60,13 +60,22 @@ func prepareBuild(label, ref, repo, cache, tags string, logf func(string, ...any
 	return out, compile(out.Dir, out.Binary, tags, logf)
 }
 
+// buildCgo is set by -cgo; build tags such as vectorscan also need cgo.
+var buildCgo bool
+
+func cgoSetting(tags string) string {
+	if buildCgo || tags != "" {
+		return "1"
+	}
+	return "0"
+}
+
 func compile(dir, binary, tags string, logf func(string, ...any)) error {
 	logf("building %s", dir)
 	args := []string{"build", "-trimpath", "-o", binary}
-	env := append(os.Environ(), "CGO_ENABLED=0")
+	env := append(os.Environ(), "CGO_ENABLED="+cgoSetting(tags))
 	if tags != "" {
 		args = append(args, "-tags", tags)
-		env = append(os.Environ(), "CGO_ENABLED=1")
 	}
 	command := exec.Command("go", append(args, "./cmd/cli")...)
 	command.Dir = dir

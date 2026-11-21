@@ -7,6 +7,7 @@ provider, and writes a report in the format pull requests use.
     make bench                                   # main vs HEAD, small suite
     make bench BENCH_HEAD=.                      # include uncommitted changes
     make bench BENCH_SUITE=medium BENCH_FLAGS='-runs 5 -tags vectorscan'
+    make bench BENCH_FLAGS='-cgo'                # cgo without tags, e.g. for tree-sitter
     make bench-fetch BENCH_SUITE=large           # download corpora ahead of time
 
 To compare foco against another tool that speaks System One, pass an

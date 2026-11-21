@@ -135,10 +135,9 @@ func buildDetector(b build, cache, tags, scratch string, logf func(string, ...an
 	binary := filepath.Join(cache, "bin", "detect-"+filepath.Base(b.Binary))
 	logf("building detector benchmark for %s", b.Label)
 	args := []string{"build", "-overlay", overlayFile, "-o", binary}
-	env := append(os.Environ(), "CGO_ENABLED=0")
+	env := append(os.Environ(), "CGO_ENABLED="+cgoSetting(tags))
 	if tags != "" {
 		args = append(args, "-tags", tags)
-		env = append(os.Environ(), "CGO_ENABLED=1")
 	}
 	command := exec.Command("go", append(args, "./internal/focobenchdetect")...)
 	command.Dir = b.Dir
