@@ -1,0 +1,154 @@
+{
+  "corpora": [
+    {
+      "name": "gitleaks",
+      "suite": "small",
+      "git": "https://github.com/gitleaks/gitleaks",
+      "commit": "5f6ec56cfa6f8c67648d863582c7ae2f206d5c1c",
+      "queries": [
+        "where are the secret detection rules defined and compiled",
+        "how does gitleaks scan git history for leaks"
+      ]
+    },
+    {
+      "name": "trufflehog",
+      "suite": "small",
+      "git": "https://github.com/trufflesecurity/trufflehog",
+      "commit": "27eae925deeeaf2bdad195eb197307b66596bf13",
+      "queries": [
+        "how are detectors registered and run against chunks",
+        "how is a found credential verified"
+      ]
+    },
+    {
+      "name": "betterleaks",
+      "suite": "small",
+      "git": "https://github.com/betterleaks/betterleaks",
+      "commit": "4cd7080160031ba1c91fd3a58609f4a63af23de1",
+      "queries": [
+        "how is the detector built from the default config",
+        "where are findings filtered by allowlists"
+      ]
+    },
+    {
+      "name": "titus-test-secrets",
+      "suite": "small",
+      "file": "https://raw.githubusercontent.com/praetorian-inc/titus/257068314b5ea785974067cdcba0daf622164c8a/extension/test/test-secrets.html",
+      "commit": "257068314b5ea785974067cdcba0daf622164c8a",
+      "queries": [
+        "where are API keys used in this page"
+      ],
+      "mustExclude": ["test-secrets.html"]
+    },
+    {
+      "name": "croc",
+      "suite": "small",
+      "git": "https://github.com/schollz/croc",
+      "commit": "440ed73844fd02a8185e6e6d2d4cd772388587dc",
+      "queries": [
+        "how does the relay connect a sender and a receiver",
+        "where is the PAKE key exchange implemented"
+      ]
+    },
+    {
+      "name": "django",
+      "suite": "medium",
+      "git": "https://github.com/django/django",
+      "commit": "c67d872765e05ebd009fadf7de8d834b01bae9e4",
+      "queries": [
+        "how does the ORM compile queryset filters into SQL",
+        "where is CSRF protection implemented"
+      ]
+    },
+    {
+      "name": "rails",
+      "suite": "medium",
+      "git": "https://github.com/rails/rails",
+      "commit": "6104b126f4bbeb4593c427d70fd79e4e079c61c4",
+      "queries": [
+        "how does Active Record run database migrations",
+        "where are routes matched to controller actions"
+      ]
+    },
+    {
+      "name": "ruby",
+      "suite": "medium",
+      "git": "https://github.com/ruby/ruby",
+      "commit": "b84532add768500d63080f529f7b68449fba7e7d",
+      "queries": [
+        "how does the garbage collector mark objects",
+        "where is Ruby source compiled to bytecode"
+      ]
+    },
+    {
+      "name": "sentry",
+      "suite": "medium",
+      "git": "https://github.com/getsentry/sentry",
+      "commit": "f5d9a4c3e403d3419dea9b0005408d34d30c6015",
+      "queries": [
+        "how are incoming events ingested and grouped into issues",
+        "where are metric alert rules evaluated"
+      ]
+    },
+    {
+      "name": "lucene",
+      "suite": "medium",
+      "git": "https://github.com/apache/lucene",
+      "commit": "7b8418faa2ff17974fe21d9f8ab66496f23e715b",
+      "queries": [
+        "how is the inverted index written to disk",
+        "where is BM25 similarity scoring implemented"
+      ]
+    },
+    {
+      "name": "typescript",
+      "suite": "medium",
+      "git": "https://github.com/microsoft/TypeScript",
+      "commit": "01f1a759d92b19ea7024776da02358995d56a7ff",
+      "queries": [
+        "how does the checker infer type arguments for generic calls",
+        "where are declaration files emitted"
+      ]
+    },
+    {
+      "name": "gitlab",
+      "suite": "large",
+      "git": "https://gitlab.com/gitlab-org/gitlab.git",
+      "commit": "fa1ae3493bc06f3cb892697e72aa4811176cd983",
+      "queries": [
+        "how is a CI pipeline created from .gitlab-ci.yml",
+        "where are merge request approval rules checked"
+      ]
+    },
+    {
+      "name": "mongo-d5ba544",
+      "suite": "large",
+      "git": "https://github.com/mongodb/mongo",
+      "commit": "d5ba544e61d708a3153df22f6659d7bd58897240",
+      "queries": [
+        "how does the query planner choose an index",
+        "where are oplog entries applied on secondaries"
+      ]
+    },
+    {
+      "name": "mongo-525eca9",
+      "suite": "large",
+      "git": "https://github.com/mongodb/mongo",
+      "commit": "525eca950da83a9beba9c4e3cf8f060799e37e98",
+      "queries": [
+        "how does the query planner choose an index",
+        "where are oplog entries applied on secondaries"
+      ]
+    },
+    {
+      "name": "linux",
+      "suite": "large",
+      "git": "https://github.com/torvalds/linux",
+      "commit": "5f22fb20497f4983094131f00a734362300d22d2",
+      "queries": [
+        "how does the CFS scheduler pick the next task",
+        "where does ext4 commit its journal"
+      ]
+    }
+  ]
+}

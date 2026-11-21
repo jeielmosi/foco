@@ -31,7 +31,7 @@ ifneq ($(VECTORSCAN_PREFIX),)
 export PKG_CONFIG_PATH := $(VECTORSCAN_PREFIX)/lib/pkgconfig:$(PKG_CONFIG_PATH)
 endif
 
-.PHONY: all build build-pure install install-pure uninstall deps check-vectorscan verify-vectorscan check ci fmt fmt-check vet test test-race test-vectorscan test-race-vectorscan tidy clean help
+.PHONY: bench bench-fetch all build build-pure install install-pure uninstall deps check-vectorscan verify-vectorscan check ci fmt fmt-check vet test test-race test-vectorscan test-race-vectorscan tidy clean help
 
 all: check build
 
@@ -86,6 +86,17 @@ test-race-vectorscan: check-vectorscan
 verify-vectorscan: check-vectorscan
 	CGO_ENABLED=1 $(GOENV) $(GO) test -tags "vectorscan" -count=1 -run TestTitusDetectsKnownToken -v ./internal/detect
 
+BENCH_BASE ?= main
+BENCH_HEAD ?= HEAD
+BENCH_SUITE ?= small
+BENCH_FLAGS ?=
+
+bench:
+	$(GOENV) $(GO) run ./bench/cmd/foco-bench run -base "$(BENCH_BASE)" -head "$(BENCH_HEAD)" -suite "$(BENCH_SUITE)" $(BENCH_FLAGS)
+
+bench-fetch:
+	$(GOENV) $(GO) run ./bench/cmd/foco-bench fetch -suite "$(BENCH_SUITE)"
+
 tidy:
 	$(GOENV) $(GO) mod tidy
 
@@ -116,5 +127,7 @@ help:
 		'make test-race              Pure-Go tests with the race detector' \
 		'make test-vectorscan        Test suite with the vectorscan build tag' \
 		'make test-race-vectorscan   Race tests with the vectorscan build tag' \
+		'make bench                  Compare BENCH_BASE (main) with BENCH_HEAD (HEAD) on BENCH_SUITE (small); see bench/README.md' \
+		'make bench-fetch            Download the BENCH_SUITE corpora' \
 		'make tidy                   go mod tidy' \
 		'make clean                  Remove bin/'
