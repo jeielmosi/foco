@@ -120,6 +120,7 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 		}
 		return outcome
 	})
+	discovery.OutlinePreviews = outlineMode
 	if input.NavigationBatchSize > 0 {
 		navigator.batchSize = input.NavigationBatchSize
 	}

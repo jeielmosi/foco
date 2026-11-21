@@ -96,7 +96,10 @@ func previewDirectory(ctx context.Context, reader Reader, directory string, issu
 	return preview
 }
 
-func previewFile(snapshot files.Snapshot) *requests.FilePreview {
+// previewFile previews a file by its opening bytes. With outlines, a file
+// too large for one preview gets a shorter opening plus its declaration
+// outline instead.
+func previewFile(snapshot files.Snapshot, outlines bool) *requests.FilePreview {
 	data := []byte(snapshot.Source)
 	limit := len(data)
 	if limit > PreviewBytes {
@@ -111,7 +114,7 @@ func previewFile(snapshot files.Snapshot) *requests.FilePreview {
 		SizeBytes: len(data), Extension: extension(snapshot.Path), Text: text,
 		PreviewBytes: len(text), Truncated: truncated, Range: "opening bytes",
 	}
-	if truncated {
+	if truncated && outlines {
 		if outlined, ok := outlinePreview(snapshot); ok {
 			preview.Text, preview.PreviewBytes, preview.Range = outlined, len(outlined), "opening bytes and declaration outline"
 		}

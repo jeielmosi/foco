@@ -51,7 +51,7 @@ func readSnapshots(ctx context.Context, reader Reader, paths []string) []files.S
 }
 
 type prefetcher interface {
-	Prefetch(ctx context.Context, request provider.Request)
+	Prefetch(ctx context.Context, request provider.Request) bool
 }
 
 // prefetchEvaluator turns every Evaluate into a Prefetch, so running the

@@ -28,6 +28,56 @@ github.com/spf13/cobra v1.10.2
 License: Apache-2.0
 License text: licenses/github-com-spf13-cobra.txt
 
+github.com/tree-sitter/go-tree-sitter v0.25.0
+Used for: tree-sitter Go bindings and the tree-sitter runtime (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-go-tree-sitter.txt
+
+github.com/tree-sitter/tree-sitter-c v0.24.2
+Used for: C grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-c.txt
+
+github.com/tree-sitter/tree-sitter-cpp v0.23.4
+Used for: C++ grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-cpp.txt
+
+github.com/tree-sitter/tree-sitter-go v0.25.0
+Used for: Go grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-go.txt
+
+github.com/tree-sitter/tree-sitter-java v0.23.5
+Used for: Java grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-java.txt
+
+github.com/tree-sitter/tree-sitter-javascript v0.25.0
+Used for: JavaScript grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-javascript.txt
+
+github.com/tree-sitter/tree-sitter-python v0.25.0
+Used for: Python grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-python.txt
+
+github.com/tree-sitter/tree-sitter-ruby v0.23.1
+Used for: Ruby grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-ruby.txt
+
+github.com/tree-sitter/tree-sitter-rust v0.24.2
+Used for: Rust grammar (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-rust.txt
+
+github.com/tree-sitter/tree-sitter-typescript v0.23.2
+Used for: TypeScript and TSX grammars (declaration outlines)
+License: MIT
+License text: licenses/github-com-tree-sitter-tree-sitter-typescript.txt
+
 gopkg.in/yaml.v3 v3.0.1
 License: MIT and Apache-2.0
 License text: licenses/gopkg-in-yaml-v3.txt

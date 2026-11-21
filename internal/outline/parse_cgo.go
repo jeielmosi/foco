@@ -3,6 +3,7 @@
 package outline
 
 import (
+	"sync"
 	"unsafe"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
@@ -31,12 +32,33 @@ func grammarAvailable(name string) bool { _, ok := grammars[name]; return ok }
 // C++ in a .h file) yields mostly errors and misleading declarations.
 const maxErrorShare = 0.2
 
+// parsers keeps one pool of configured parsers per language; a parser is
+// not safe for concurrent use, but reusing one avoids allocating it per file.
+var parsers sync.Map
+
+func parserFor(name string) (*sitter.Parser, func(), bool) {
+	value, _ := parsers.LoadOrStore(name, &sync.Pool{New: func() any {
+		parser := sitter.NewParser()
+		if err := parser.SetLanguage(sitter.NewLanguage(grammars[name]())); err != nil {
+			parser.Close()
+			return nil
+		}
+		return parser
+	}})
+	pool := value.(*sync.Pool)
+	parser, ok := pool.Get().(*sitter.Parser)
+	if !ok || parser == nil {
+		return nil, nil, false
+	}
+	return parser, func() { pool.Put(parser) }, true
+}
+
 func parse(lang *language, source []byte) []Declaration {
-	parser := sitter.NewParser()
-	defer parser.Close()
-	if err := parser.SetLanguage(sitter.NewLanguage(grammars[lang.name]())); err != nil {
+	parser, release, ok := parserFor(lang.name)
+	if !ok {
 		return nil
 	}
+	defer release()
 	tree := parser.Parse(source, nil)
 	if tree == nil {
 		return nil

@@ -16,7 +16,9 @@ type discoveryState struct {
 	Pruned      map[string]requests.NavigationItem
 	Previews    map[string]*requests.FilePreview
 	Donors      map[string][]Donor
-	Admitted    func(path string)
+	// OutlinePreviews gives large files outline previews (outline pipeline).
+	OutlinePreviews bool
+	Admitted        func(path string)
 }
 
 type levelDirectory struct {
@@ -150,7 +152,7 @@ func discover(
 				if report != nil {
 					report(relative, result.Snapshot)
 				}
-				preview := previewFile(*result.Snapshot)
+				preview := previewFile(*result.Snapshot, state.OutlinePreviews)
 				state.Previews[relative] = preview
 				state.Donors[relative] = []Donor{{Path: relative, ContentHash: result.Snapshot.ContentHash}}
 				item := requests.NavigationItem{Path: relative, Kind: enums.NavigationKindFile, FilePreview: preview}

@@ -23,11 +23,14 @@ runtime, tree-sitter assets, and a persistent response cache.
 
 The rewrite removes that content-scanning path instead of porting it. Foco uses
 a path-only boolean secret gate and does not persist provider responses to
-disk. Cgo builds parse Go, Python, Ruby, JavaScript, TypeScript, Java, C, C++
-and Rust declarations with tree-sitter grammars compiled into the binary (no
-runtime assets): large files get a declaration outline in their previews, and
-source selection asks about whole declarations instead of fixed 40-line
-windows. Other languages, and builds without cgo, keep the line windows. Go
+disk. With `--pipeline outline`, cgo builds parse Go, Python, Ruby,
+JavaScript, TypeScript, Java, C, C++ and Rust declarations with tree-sitter
+grammars compiled into the binary (no runtime assets): large files get a
+declaration outline in their previews, source selection asks about whole
+declarations instead of fixed 40-line windows, role questions ride on
+selection requests, and references are resolved locally. The default
+`classic` pipeline, other languages and builds without cgo keep the line
+windows. Go
 provides a standalone CLI, with Vectorscan acceleration and a pure-Go build
 path. These are design
 choices and measured project results, not a guarantee that every workload is

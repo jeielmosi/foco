@@ -545,10 +545,11 @@ func requestKey(request provider.Request) string {
 	return string(blob)
 }
 
-func (e *prefetchingEvaluator) Prefetch(_ context.Context, request provider.Request) {
+func (e *prefetchingEvaluator) Prefetch(_ context.Context, request provider.Request) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.prefetched[requestKey(request)] = true
+	return false
 }
 
 func (e *prefetchingEvaluator) Evaluate(ctx context.Context, request provider.Request, options provider.EvalOptions) (map[string]float64, error) {
@@ -705,6 +706,43 @@ func TestOutlinePipelineFoldsRolesAndSendsOnlyChosenBodies(t *testing.T) {
 	}
 	if !strings.Contains(shown, "func Unrelated1()") || !strings.Contains(shown, "func ParseConfigFile()") {
 		t.Fatalf("large.go excerpts miss the chosen body or the locally resolved reference:\n%s", shown)
+	}
+}
+
+func TestClassicPipelineKeepsLineWindows(t *testing.T) {
+	root := t.TempDir()
+	writeRetrieveFile(t, root, "a.ts", "export function handler(): number {\n  return 1;\n}\n")
+	reader, err := files.New(root, files.DefaultPolicy(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var mu sync.Mutex
+	names := []string{}
+	inner := pipelineEvaluator(nil)
+	evaluator := &scriptedEvaluator{answers: func(request provider.Request) (map[string]float64, error) {
+		if state, ok := request.State.(requests.EvidenceState); ok {
+			mu.Lock()
+			for _, declaration := range state.Declarations {
+				names = append(names, declaration.Name)
+			}
+			mu.Unlock()
+		}
+		if _, ok := request.State.(requests.OutlineState); ok {
+			t.Errorf("classic pipeline sent an outline request")
+		}
+		return inner.answers(request)
+	}}
+	if _, err := Run(context.Background(), Input{Query: "handler"}, evaluator, reader); err != nil {
+		t.Fatal(err)
+	}
+	if len(names) == 0 {
+		t.Fatal("no selection requests")
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, "lines ") {
+			t.Fatalf("classic window named %q, want line windows", name)
+		}
 	}
 }
 

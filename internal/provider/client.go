@@ -223,30 +223,31 @@ func (c *Client) Evaluate(ctx context.Context, request Request, options EvalOpti
 // concurrency slots, so foreground requests always find room. It does nothing
 // once half the request limit is used, while the provider asks to back off,
 // or after any 429, so speculation can neither exhaust the request budget nor
-// add pressure to a rate-limited provider.
-func (c *Client) Prefetch(ctx context.Context, request Request) {
+// add pressure to a rate-limited provider. It reports whether an answer is
+// now in the memo or already on its way.
+func (c *Client) Prefetch(ctx context.Context, request Request) bool {
 	if c.schema == nil {
-		return
+		return false
 	}
 	body, err := c.schema.marshalRequest(c.profile.Model, request)
 	if err != nil {
-		return
+		return false
 	}
 	key := memoKey{body: sha256.Sum256(body)}
 	c.memoMu.Lock()
 	_, found := c.memo[key]
 	c.memoMu.Unlock()
 	if found {
-		return
+		return true
 	}
 	select {
 	case c.prefetchSlots <- struct{}{}:
 	case <-ctx.Done():
-		return
+		return false
 	}
 	defer func() { <-c.prefetchSlots }()
 	if !c.prefetchAllowed() {
-		return
+		return false
 	}
 	c.memoMu.Lock()
 	if c.memo == nil {
@@ -254,7 +255,7 @@ func (c *Client) Prefetch(ctx context.Context, request Request) {
 	}
 	if _, found := c.memo[key]; found {
 		c.memoMu.Unlock()
-		return
+		return true
 	}
 	call := &memoCall{done: make(chan struct{})}
 	c.memo[key] = call
@@ -268,6 +269,7 @@ func (c *Client) Prefetch(ctx context.Context, request Request) {
 	}
 	c.memoMu.Unlock()
 	close(call.done)
+	return ok
 }
 
 func (c *Client) prefetchAllowed() bool {

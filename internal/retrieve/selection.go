@@ -504,7 +504,7 @@ func selectFileWith(
 	}
 	windows := options.windows
 	if windows == nil {
-		windows = buildWindows(index, outline.Of(snapshot.Path, snapshot.ContentHash, snapshot.Source))
+		windows = buildWindows(index, nil)
 	}
 	groups := groupWindows(index, windows, min(SelectionBatchSize, (MaxQuestionsPerRequest-len(options.extra))/perWindow), options.sparse)
 	contextOf := contextFor

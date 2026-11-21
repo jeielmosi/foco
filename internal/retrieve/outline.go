@@ -2,6 +2,7 @@ package retrieve
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"regexp"
 	"sort"
@@ -59,8 +60,12 @@ type prefetchThenEvaluate struct {
 
 func (p prefetchThenEvaluate) Requests() int { return 0 }
 
+// Evaluate reads the answer only when the prefetch produced one, so the
+// prefetch pool never sends a foreground request past the prefetch budget.
 func (p prefetchThenEvaluate) Evaluate(ctx context.Context, request provider.Request, options provider.EvalOptions) (map[string]float64, error) {
-	p.warm.Prefetch(ctx, request)
+	if !p.warm.Prefetch(ctx, request) {
+		return nil, errPrefetched
+	}
 	return p.inner.Evaluate(ctx, request, options)
 }
 
@@ -151,9 +156,22 @@ func chooseDeclarations(
 		value    float64
 	}
 	candidates := []scored{}
+	// A failed chunk drops only its own declarations, as a failed group does in
+	// classic selection; fatal failures and a fully failed file are returned.
+	usable := 0
+	for _, err := range failed {
+		if err == nil {
+			usable++
+		} else if fatalIssue(retrievalIssueForProviderFailure(asFailure(err).Kind)) {
+			return nil, nil, err
+		}
+	}
+	if usable == 0 {
+		return nil, nil, failed[0]
+	}
 	for position, current := range chunks {
 		if failed[position] != nil {
-			return nil, nil, failed[position]
+			continue
 		}
 		for offset := 0; offset < current.end-current.start; offset++ {
 			value, ok := answered[position][outlineQuestion(offset)]
@@ -273,7 +291,10 @@ type localEvaluator struct{ scores map[[2]int]float64 }
 func (l localEvaluator) Requests() int { return 0 }
 
 func (l localEvaluator) Evaluate(_ context.Context, request provider.Request, _ provider.EvalOptions) (map[string]float64, error) {
-	state, _ := request.State.(requests.EvidenceState)
+	state, ok := request.State.(requests.EvidenceState)
+	if !ok {
+		return nil, fmt.Errorf("local evaluator: unexpected request state %T", request.State)
+	}
 	out := map[string]float64{}
 	for position, declaration := range state.Declarations {
 		value := l.scores[[2]int{declaration.StartLine, declaration.EndLine}]
