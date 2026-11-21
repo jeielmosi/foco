@@ -16,7 +16,6 @@ func newDetector() (detect.Engine, error) {
 	if workers > 8 {
 		workers = 8
 	}
-	// Rule compilation for the two engines is independent; overlap it.
 	type built struct {
 		engine *detect.Betterleaks
 		err    error

@@ -136,7 +136,6 @@ func (c *Client) Requests() int {
 	return c.requests
 }
 
-// CacheHits reports evaluations answered from this client's in-memory memo.
 func (c *Client) CacheHits() int {
 	c.memoMu.Lock()
 	defer c.memoMu.Unlock()

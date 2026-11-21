@@ -414,7 +414,6 @@ func recordFailure(issues *issueSet, failure *provider.Failure) {
 	issues.add(retrievalIssueForProviderFailure(failure.Kind))
 }
 
-// cacheHits reports in-memory answer reuse when the evaluator tracks it.
 func cacheHits(evaluator Evaluator) int {
 	if counter, ok := evaluator.(interface{ CacheHits() int }); ok {
 		return counter.CacheHits()

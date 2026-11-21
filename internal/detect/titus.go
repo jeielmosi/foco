@@ -103,7 +103,6 @@ func (t *Titus) DetectPath(ctx context.Context, path string) (bool, error) {
 	return t.DetectContent(ctx, path, data)
 }
 
-// DetectContent reports whether content contains anything the scanner treats as sensitive.
 func (t *Titus) DetectContent(ctx context.Context, _ string, content []byte) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

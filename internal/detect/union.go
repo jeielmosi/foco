@@ -51,7 +51,6 @@ func (u *Union) DetectPath(ctx context.Context, path string) (bool, error) {
 	return u.better.DetectPath(ctx, path)
 }
 
-// DetectContent applies the same union to content already read from path.
 // Engines that cannot scan bytes fall back to reading path themselves.
 func (u *Union) DetectContent(ctx context.Context, path string, content []byte) (bool, error) {
 	if u.all {

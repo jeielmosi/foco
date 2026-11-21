@@ -53,7 +53,7 @@ func readSnapshots(ctx context.Context, reader Reader, paths []string) []files.S
 // level below) and starts reads for their files, so detection runs in parallel
 // across directories instead of one small directory at a time. The consumer
 // still takes results in its own order and records issues itself; the walker
-// only warms results. At most aheadLimit results wait unconsumed.
+// only warms results.
 type readAhead struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -123,7 +123,6 @@ func startReadAhead(ctx context.Context, reader Reader, root string, directories
 	return ahead
 }
 
-// stop cancels outstanding read-ahead and waits for in-flight reads.
 func (r *readAhead) stop() {
 	r.cancel()
 	r.done.Wait()

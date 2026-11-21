@@ -63,7 +63,6 @@ func (b *Betterleaks) DetectPath(ctx context.Context, path string) (bool, error)
 	return b.scan(ctx, path, file)
 }
 
-// DetectContent scans content already read from path.
 func (b *Betterleaks) DetectContent(ctx context.Context, path string, content []byte) (bool, error) {
 	return b.scan(ctx, path, bytes.NewReader(content))
 }

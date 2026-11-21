@@ -81,12 +81,10 @@ func newTitusRules(rules []*types.Rule, prefilter bool) (*titusRules, error) {
 	return out, nil
 }
 
-// Rules returns the loaded rules.
 func (t *titusRules) Rules() []*types.Rule {
 	return append([]*types.Rule(nil), t.all...)
 }
 
-// match reports whether any rule matches content.
 func (t *titusRules) match(content []byte) (bool, error) {
 	if t.always != nil {
 		found, err := t.always.Match(content)

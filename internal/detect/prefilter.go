@@ -106,7 +106,6 @@ func expandFreeSpacing(pattern string) (string, bool) {
 	return pattern, true
 }
 
-// enablesFreeSpacing reports any inline flag group that turns on x.
 func enablesFreeSpacing(pattern string) bool {
 	for index := 0; index+2 < len(pattern); index++ {
 		if pattern[index] != '(' || pattern[index+1] != '?' {
