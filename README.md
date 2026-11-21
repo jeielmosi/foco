@@ -88,10 +88,16 @@ jevgrep command or API integration.
 
 ## Installing Foco
 
-Building requires Go 1.27 or newer and, on Linux or macOS, `make`. Vectorscan
-acceleration is optional: when `pkg-config` and Hyperscan/Vectorscan are
-available, `make` builds the accelerated binary; otherwise it falls back to the
-portable pure-Go engine without prompting for a password.
+Building requires Go 1.27 or newer and, on Linux or macOS, `make`. `make`
+builds with Vectorscan (SIMD regex matching, about 13x less secret-scanning
+CPU) by default. It uses a system Hyperscan/Vectorscan when `pkg-config` finds
+one, then tries Homebrew or the system package manager with passwordless
+`sudo`. Without root on Fedora or Debian/Ubuntu, it downloads the distribution
+package with `dnf download` or `apt-get download`, unpacks it into
+`~/.local/share/foco/vectorscan` (override with `FOCO_VECTORSCAN_PREFIX`) and
+links the binary to it; that directory must then stay in place. If none of
+these work, it falls back to the portable pure-Go engine without prompting for
+a password.
 
     make            # gofmt + vet + tests, then build bin/foco
     make install    # install to ~/.local/bin/foco

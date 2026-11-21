@@ -69,7 +69,7 @@ func newTitusRules(rules []*types.Rule, prefilter bool) (*titusRules, error) {
 	}
 	out.matchers = make([]lazyMatcher, len(out.rules))
 	if len(always) > 0 {
-		compiled, err := matcher.New(matcher.Config{Rules: always, ContextLines: titusContextLines})
+		compiled, err := newTitusMatcher(matcher.Config{Rules: always, ContextLines: titusContextLines})
 		if err != nil {
 			return nil, fmt.Errorf("detect: creating titus matcher: %w", err)
 		}
@@ -128,7 +128,7 @@ func (t *titusRules) match(content []byte) (bool, error) {
 func (t *titusRules) matcher(position int) (matcher.Matcher, error) {
 	lazy := &t.matchers[position]
 	lazy.once.Do(func() {
-		lazy.matcher, lazy.err = matcher.New(matcher.Config{
+		lazy.matcher, lazy.err = newTitusMatcher(matcher.Config{
 			Rules: []*types.Rule{t.rules[position]}, ContextLines: titusContextLines,
 		})
 		if lazy.err != nil {

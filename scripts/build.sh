@@ -74,8 +74,58 @@ install_linux() {
 	have_libhs
 }
 
+# Without root, unpack the distribution's Vectorscan/Hyperscan packages into a
+# user-local prefix and link against it with an rpath, so accelerated builds
+# do not require sudo.
+LOCAL_HS="${FOCO_VECTORSCAN_PREFIX:-${XDG_DATA_HOME:-$HOME/.local/share}/foco/vectorscan}"
+
+add_local_path() {
+	for dir in "$LOCAL_HS/usr/lib64" "$LOCAL_HS/usr/lib" "$LOCAL_HS"/usr/lib/*-linux-gnu; do
+		if [ -f "$dir/pkgconfig/libhs.pc" ]; then
+			export PKG_CONFIG_PATH="$dir/pkgconfig:${PKG_CONFIG_PATH:-}"
+			export CGO_LDFLAGS="${CGO_LDFLAGS:-} -Wl,-rpath,$dir"
+			return 0
+		fi
+	done
+	return 1
+}
+
+fetch_local_linux() {
+	work="$(mktemp -d)" || return 1
+	if command -v dnf >/dev/null 2>&1 && command -v rpm2cpio >/dev/null 2>&1 && command -v cpio >/dev/null 2>&1; then
+		log "downloading vectorscan-devel with dnf into $LOCAL_HS (no root)"
+		(cd "$work" && dnf download -q vectorscan vectorscan-devel) || { rm -rf "$work"; return 1; }
+		mkdir -p "$LOCAL_HS"
+		for package in "$work"/*.rpm; do
+			(cd "$LOCAL_HS" && rpm2cpio "$package" | cpio -idm --quiet) || { rm -rf "$work"; return 1; }
+		done
+	elif command -v apt-get >/dev/null 2>&1 && command -v dpkg-deb >/dev/null 2>&1; then
+		log "downloading libhyperscan-dev with apt-get into $LOCAL_HS (no root)"
+		runtime="$(apt-cache depends libhyperscan-dev 2>/dev/null | awk '/Depends: libhyperscan[0-9]/ {print $2; exit}')"
+		(cd "$work" && apt-get download -q libhyperscan-dev $runtime) || { rm -rf "$work"; return 1; }
+		mkdir -p "$LOCAL_HS"
+		for package in "$work"/*.deb; do
+			dpkg-deb -x "$package" "$LOCAL_HS" || { rm -rf "$work"; return 1; }
+		done
+	else
+		rm -rf "$work"
+		return 1
+	fi
+	rm -rf "$work"
+	for pc in "$LOCAL_HS"/usr/lib64/pkgconfig/libhs.pc "$LOCAL_HS"/usr/lib/pkgconfig/libhs.pc "$LOCAL_HS"/usr/lib/*-linux-gnu/pkgconfig/libhs.pc; do
+		[ -f "$pc" ] || continue
+		sed -e "s#^prefix=.*#prefix=$LOCAL_HS/usr#" \
+			-e 's#^exec_prefix=.*#exec_prefix=${prefix}#' \
+			-e "s#^libdir=/usr/#libdir=\${prefix}/#" \
+			-e "s#^includedir=/usr/#includedir=\${prefix}/#" \
+			"$pc" > "$pc.tmp" && mv "$pc.tmp" "$pc"
+	done
+	add_local_path && have_libhs
+}
+
 ensure_vectorscan() {
 	add_brew_path
+	add_local_path
 	have_libhs && return 0
 	case "$(uname -s)" in
 		Darwin)
@@ -83,6 +133,7 @@ ensure_vectorscan() {
 			;;
 		Linux)
 			install_linux && return 0
+			fetch_local_linux && return 0
 			;;
 	esac
 	return 1
@@ -109,6 +160,7 @@ build_pure() {
 case "$MODE" in
 	check|--check)
 		add_brew_path
+		add_local_path
 		if have_libhs; then
 			log "libhs $(pkg-config --modversion libhs) found"
 			exit 0
