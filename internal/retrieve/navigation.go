@@ -94,7 +94,7 @@ func groupNavigation(query string, items []requests.NavigationItem, anchor *requ
 		}
 		if len(current) > 0 {
 			candidate := append(append([]requests.NavigationItem{}, current...), item)
-			if len(current) >= batchSize ||
+			if len(current) >= min(batchSize, MaxQuestionsPerRequest) ||
 				requestSize(requests.NavigationRequest(query, candidate, anchor)) > batchBytes {
 				flush()
 			}

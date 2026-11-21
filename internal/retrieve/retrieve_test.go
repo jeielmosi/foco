@@ -592,6 +592,34 @@ func TestCandidatePrefetchWarmsExactlyTheFinalRequests(t *testing.T) {
 	}
 }
 
+func TestNoRequestExceedsTheQuestionLimit(t *testing.T) {
+	root := t.TempDir()
+	for index := range 250 {
+		writeRetrieveFile(t, root, "f"+itoa(index)+".ts", "export const value"+itoa(index)+" = 1;\n")
+	}
+	writeRetrieveFile(t, root, "big.ts", strings.Repeat("export function handler() { return 1; }\n", 6000))
+	reader, err := files.New(root, files.DefaultPolicy(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var mu sync.Mutex
+	most := 0
+	inner := pipelineEvaluator(nil)
+	evaluator := &scriptedEvaluator{answers: func(request provider.Request) (map[string]float64, error) {
+		mu.Lock()
+		most = max(most, len(request.Questions))
+		mu.Unlock()
+		return inner.answers(request)
+	}}
+	if _, err := Run(context.Background(), Input{Query: "handler"}, evaluator, reader); err != nil {
+		t.Fatal(err)
+	}
+	if most == 0 || most > MaxQuestionsPerRequest {
+		t.Fatalf("largest request had %d questions, limit %d", most, MaxQuestionsPerRequest)
+	}
+}
+
 func writeRetrieveFile(t *testing.T, root, relative, source string) {
 	t.Helper()
 	absolute := filepath.Join(root, filepath.FromSlash(relative))

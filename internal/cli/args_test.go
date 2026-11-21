@@ -176,8 +176,9 @@ func TestUsageMessagesMatchUpstream(t *testing.T) {
 		{[]string{"q", "--concurrency", "+1"}, "--concurrency must be a positive integer."},
 		{[]string{"q", "--parallel", "-1"}, "--parallel must be an integer from 0 (all CPU cores) to 4096."},
 		{[]string{"q", "--parallel", "4097"}, "--parallel must be an integer from 0 (all CPU cores) to 4096."},
-		{[]string{"q", "--nav-batch-size", "0"}, "--nav-batch-size must be an integer from 1 to 4096."},
-		{[]string{"q", "--nav-batch-bytes", "37999"}, "--nav-batch-bytes must be an integer from 38000 to 4000000."},
+		{[]string{"q", "--nav-batch-size", "0"}, "--nav-batch-size must be an integer from 1 to 100."},
+		{[]string{"q", "--nav-batch-bytes", "37999"}, "--nav-batch-bytes must be an integer from 38000 to 64000."},
+		{[]string{"q", "--nav-batch-size", "101"}, "--nav-batch-size must be an integer from 1 to 100."},
 		{[]string{"q", "--max-requests", "0"}, "--max-requests must be a positive integer."},
 		{[]string{"q", "--max-requests", "1e2"}, "--max-requests must be a positive integer."},
 		{[]string{"q", "--max-source-bytes=-1"}, "--max-source-bytes must be a nonnegative integer (0 means unlimited)."},
@@ -221,11 +222,11 @@ func TestParallelDefaultsToHalfTheCores(t *testing.T) {
 }
 
 func TestNavigationBatchFlags(t *testing.T) {
-	command, err := Parse([]string{"q", "--nav-batch-size", "512", "--nav-batch-bytes=200000"})
+	command, err := Parse([]string{"q", "--nav-batch-size", "64", "--nav-batch-bytes=60000"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if command.Search.NavBatchSize != 512 || command.Search.NavBatchBytes != 200000 {
+	if command.Search.NavBatchSize != 64 || command.Search.NavBatchBytes != 60000 {
 		t.Fatalf("search = %+v", command.Search)
 	}
 	command, err = Parse([]string{"q"})

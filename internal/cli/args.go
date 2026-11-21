@@ -411,14 +411,14 @@ func parseSearch(raw rawArgs) (Command, error) {
 	if raw.has("nav-batch-size") {
 		value, parseErr := digits(raw.one("nav-batch-size"))
 		if parseErr != nil || value < 1 || value > maxNavBatchSize {
-			return Command{}, usageError("--nav-batch-size must be an integer from 1 to 4096.")
+			return Command{}, usageError("--nav-batch-size must be an integer from 1 to 100.")
 		}
 		search.NavBatchSize = int(value)
 	}
 	if raw.has("nav-batch-bytes") {
 		value, parseErr := digits(raw.one("nav-batch-bytes"))
 		if parseErr != nil || value < minNavBatchBytes || value > maxNavBatchBytes {
-			return Command{}, usageError("--nav-batch-bytes must be an integer from 38000 to 4000000.")
+			return Command{}, usageError("--nav-batch-bytes must be an integer from 38000 to 64000.")
 		}
 		search.NavBatchBytes = int(value)
 	}
@@ -449,11 +449,12 @@ func parseSearch(raw rawArgs) (Command, error) {
 }
 
 // Navigation batch limits. Below the default byte limit, single file previews
-// no longer fit one request and would be chunked or dropped.
+// no longer fit one request and would be chunked or dropped. The maximums keep
+// a request within Jev's 100 questions and 32K-token context.
 const (
-	maxNavBatchSize  = 4096
+	maxNavBatchSize  = 100
 	minNavBatchBytes = 38_000
-	maxNavBatchBytes = 4_000_000
+	maxNavBatchBytes = 64_000
 )
 
 // DefaultParallel is the CPU cores a search uses by default: half of them, so

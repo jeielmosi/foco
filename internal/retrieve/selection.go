@@ -86,13 +86,13 @@ func buildWindows(index *textIndex) []window {
 	return out
 }
 
-func groupWindows(index *textIndex, windows []window) [][]window {
+func groupWindows(index *textIndex, windows []window, limit int) [][]window {
 	var groups [][]window
 	current := []window{}
 	for _, entry := range windows {
 		if len(current) > 0 {
 			byteLength := index.offsets[entry.Range.EndLine] - index.offsets[current[0].Range.StartLine-1]
-			if len(current) >= SelectionBatchSize || byteLength > 42000 {
+			if len(current) >= limit || byteLength > SelectionGroupSourceBytes {
 				groups = append(groups, current)
 				current = []window{}
 			}
@@ -356,7 +356,12 @@ func selectFile(
 		return selectionResult{File: base, Issues: issues.list()}, nil
 	}
 	index := newTextIndex(snapshot.Source)
-	groups := groupWindows(index, buildWindows(index))
+	// Each window asks q and scope, plus ref when evidence is sent.
+	perWindow := 2
+	if prepare != nil {
+		perWindow = 3
+	}
+	groups := groupWindows(index, buildWindows(index), min(SelectionBatchSize, MaxQuestionsPerRequest/perWindow))
 	groupCount := len(groups)
 	queue := append([][]window{}, groups...)
 	selected := []span{}
@@ -409,7 +414,7 @@ func selectFile(
 			evidencePointer = &evidence
 		}
 		request := requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group), declarationsFor(group), evidencePointer)
-		if len(group) > 1 && stateSize(request.State) > 80_000 {
+		if len(group) > 1 && stateSize(request.State) > SelectionStateBytes {
 			middle := (len(group) + 1) / 2
 			queue = append([][]window{group[:middle], group[middle:]}, queue...)
 			groupCount++
