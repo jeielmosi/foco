@@ -1,0 +1,77 @@
+name: benchmark
+
+# Runs the standard benchmark (bench/README.md) for a pull request labeled
+# "benchmark", comparing its base and head commits, and posts the report as a
+# pull request comment. Re-runs on new pushes while the label is set.
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      base:
+        description: Base ref
+        default: main
+      head:
+        description: Head ref
+        default: HEAD
+      suite:
+        description: small, medium or large
+        default: small
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'benchmark')
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FOCO_BENCH_CACHE: ${{ github.workspace }}/.foco-bench
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/cache@v4
+        with:
+          path: .foco-bench/corpora
+          key: foco-bench-corpora-${{ hashFiles('bench/corpora.json') }}
+      - name: Run benchmark
+        run: |
+          go run ./bench/cmd/foco-bench run \
+            -base "${{ github.event.pull_request.base.sha || inputs.base }}" \
+            -head "${{ github.event.pull_request.head.sha || inputs.head }}" \
+            -suite "${{ inputs.suite || 'small' }}" \
+            -repo-url "${{ github.server_url }}/${{ github.repository }}" \
+            -out bench-results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: bench-results
+      - name: Comment on pull request
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- foco-bench -->';
+            const body = marker + '\n' + fs.readFileSync('bench-results/report.md', 'utf8') +
+              '\n\nRunner: GitHub-hosted `ubuntu-latest`; shared machines add noise, so compare relative changes, not absolute times.';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const previous = comments.find((comment) => comment.body.startsWith(marker));
+            if (previous) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: previous.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
