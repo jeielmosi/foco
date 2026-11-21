@@ -212,17 +212,39 @@ func (c *Credentials) DetectContent(ctx context.Context, path string, content []
 // scans with plain string search instead of regular expressions: the rules
 // run on every file foco reads.
 func credentialMatch(path, text string) string {
-	if match := awsKeyIDIn(text); match != "" {
-		return match
-	}
+	match := ""
+	scanCredentials(path, text, func(start, end int, _ string) bool {
+		match = text[start:end]
+		return true
+	})
+	return match
+}
+
+// credentialSpans returns every credential the heuristics find in text.
+func credentialSpans(path, text string) []Span {
+	var out []Span
+	scanCredentials(path, text, func(start, end int, rule string) bool {
+		out = append(out, Span{Start: start, End: end, Rule: rule, Engine: "credentials"})
+		return false
+	})
+	return out
+}
+
+// emitFunc receives one credential's byte range and rule; returning true
+// stops the scan.
+type emitFunc func(start, end int, rule string) bool
+
+func scanCredentials(path, text string, emit emitFunc) {
 	bare := bareValueExtensions[strings.ToLower(filepath.Ext(path))] || strings.HasPrefix(filepath.Base(path), ".env")
-	if match := keyedValueIn(text, bare); match != "" {
-		return match
+	_ = awsKeyIDIn(text, emit) || keyedValueIn(text, bare, emit) || urlCredentialIn(text, emit) ||
+		hostCredentialIn(text, emit) || prefixedTokenIn(text, emit)
+}
+
+func (c *Credentials) Spans(ctx context.Context, path string, content []byte) ([]Span, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if match := urlCredentialIn(text); match != "" {
-		return match
-	}
-	return hostCredentialIn(text)
+	return credentialSpans(path, string(content)), nil
 }
 
 func isUpperAlnum(c byte) bool { return (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') }
@@ -231,21 +253,23 @@ func isWordByte(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'
 }
 
-// awsKeyIDIn finds an AWS access key ID (AKIA, ASIA, AIDA or AROA plus 16
+// awsKeyIDIn finds an AWS access key ID (AKIA or ASIA plus 16
 // uppercase letters or digits) on word boundaries.
-func awsKeyIDIn(text string) string {
+func awsKeyIDIn(text string, emit emitFunc) bool {
 	for offset := 0; ; {
 		index := strings.Index(text[offset:], "A")
 		if index < 0 {
-			return ""
+			return false
 		}
 		start := offset + index
 		offset = start + 1
 		if start+20 > len(text) || (start > 0 && isWordByte(text[start-1])) {
 			continue
 		}
+		// AKIA and ASIA are access key IDs; AIDA and AROA are IAM user and role
+		// IDs, public identifiers that grant nothing.
 		switch text[start : start+4] {
-		case "AKIA", "ASIA", "AIDA", "AROA":
+		case "AKIA", "ASIA":
 		default:
 			continue
 		}
@@ -256,8 +280,8 @@ func awsKeyIDIn(text string) string {
 				break
 			}
 		}
-		if valid && (start+20 == len(text) || !isWordByte(text[start+20])) {
-			return text[start : start+20]
+		if valid && (start+20 == len(text) || !isWordByte(text[start+20])) && emit(start, start+20, "aws-access-key-id") {
+			return true
 		}
 	}
 }
@@ -320,7 +344,7 @@ func wordAt(text string, start, end int) bool {
 // keyedValueIn finds key = "value" or "key": "value" where the key contains a
 // secret or service keyword and the value looks like a password. With bare,
 // unquoted values that end their line count too (.env, .ini, YAML).
-func keyedValueIn(text string, bare bool) string {
+func keyedValueIn(text string, bare bool, emit emitFunc) bool {
 	lower := asciiLower(text)
 	seen := map[int]bool{}
 	for _, hit := range keywordMatcher.MatchThreadSafe(lower) {
@@ -343,17 +367,17 @@ func keyedValueIn(text string, bare bool) string {
 				continue
 			}
 			seen[keyStart] = true
-			if match := valueAfterKey(text, keyStart, start+len(word.text), bare, word.kind()); match != "" {
-				return match
+			if valueStart, valueEnd, ok := valueAfterKey(text, keyStart, start+len(word.text), bare, word.kind()); ok && emit(valueStart, valueEnd, "keyed-"+string(word.text)) {
+				return true
 			}
 		}
 	}
-	return ""
+	return false
 }
 
 // valueAfterKey reads the rest of the key from position, then a separator
 // and a value, and returns the value when it looks like a secret.
-func valueAfterKey(text string, keyStart, position int, bare bool, kind valueKind) string {
+func valueAfterKey(text string, keyStart, position int, bare bool, kind valueKind) (int, int, bool) {
 	cursor := position
 	for cursor < len(text) && isKeyByte(text[cursor]) {
 		cursor++
@@ -363,7 +387,7 @@ func valueAfterKey(text string, keyStart, position int, bare bool, kind valueKin
 	}
 	cursor = skipBlanks(text, cursor)
 	if cursor >= len(text) || (text[cursor] != ':' && text[cursor] != '=') {
-		return ""
+		return 0, 0, false
 	}
 	cursor++
 	// Go's ":=" and Ruby's "=>".
@@ -372,22 +396,24 @@ func valueAfterKey(text string, keyStart, position int, bare bool, kind valueKin
 	}
 	cursor = skipBlanks(text, cursor)
 	if cursor >= len(text) {
-		return ""
+		return 0, 0, false
 	}
 	var value string
+	valueStart := cursor
 	if quote := text[cursor]; quote == '"' || quote == '\'' {
+		valueStart = cursor + 1
 		end := strings.IndexAny(text[cursor+1:], string(quote)+"\n \t")
 		if end < 0 || text[cursor+1+end] != quote {
-			return ""
+			return 0, 0, false
 		}
 		value = text[cursor+1 : cursor+1+end]
 	} else {
 		if !bare {
-			return ""
+			return 0, 0, false
 		}
 		lineStart := strings.LastIndexByte(text[:keyStart], '\n') + 1
 		if prefix := strings.TrimSpace(text[lineStart:keyStart]); prefix != "" && prefix != "export" {
-			return ""
+			return 0, 0, false
 		}
 		end := strings.IndexAny(text[cursor:], " \t\r\n#;\"'")
 		if end < 0 {
@@ -395,21 +421,21 @@ func valueAfterKey(text string, keyStart, position int, bare bool, kind valueKin
 		}
 		value = text[cursor : cursor+end]
 		if rest := skipBlanks(text, cursor+end); rest < len(text) && text[rest] != '\n' && text[rest] != '\r' {
-			return ""
+			return 0, 0, false
 		}
 	}
 	if len(value) >= 8 && secretLike(value, kind) {
-		return value
+		return valueStart, valueStart + len(value), true
 	}
-	return ""
+	return 0, 0, false
 }
 
 // urlCredentialIn finds scheme://user:password@host URLs.
-func urlCredentialIn(text string) string {
+func urlCredentialIn(text string, emit emitFunc) bool {
 	for offset := 0; ; {
 		index := strings.Index(text[offset:], "://")
 		if index < 0 {
-			return ""
+			return false
 		}
 		at := offset + index + 3
 		offset = at
@@ -435,8 +461,8 @@ func urlCredentialIn(text string) string {
 		if colon <= 0 {
 			continue
 		}
-		if password := userinfo[colon+1:]; secretLike(password, passwordValue) {
-			return text[schemeStart : at+end+1]
+		if password := userinfo[colon+1:]; secretLike(password, passwordValue) && emit(at+colon+1, at+end, "url-password") {
+			return true
 		}
 	}
 }
@@ -451,17 +477,17 @@ func skipBlanks(text string, cursor int) int {
 // hostCredentialIn finds quoted "host:password" literals and "host":
 // "password" pairs, where host is a dotted hostname or IPv4 address,
 // optionally after a scheme or "://".
-func hostCredentialIn(text string) string {
+func hostCredentialIn(text string, emit emitFunc) bool {
 	for offset := 0; offset < len(text); {
 		index := strings.IndexAny(text[offset:], "\"'")
 		if index < 0 {
-			return ""
+			return false
 		}
 		start := offset + index
 		quote := text[start]
 		end := strings.IndexAny(text[start+1:], string(quote)+"\n")
 		if end < 0 {
-			return ""
+			return false
 		}
 		end += start + 1
 		offset = end + 1
@@ -478,7 +504,10 @@ func hostCredentialIn(text string) string {
 			if hostLike(host[:colon]) {
 				password := host[colon+1:]
 				if len(password) >= 8 && !strings.ContainsAny(password, ":/") && secretLike(password, strongValue) {
-					return literal
+					passwordStart := start + 1 + len(literal) - len(host) + colon + 1
+					if emit(passwordStart, passwordStart+len(password), "host-password") {
+						return true
+					}
 				}
 			}
 			continue
@@ -504,11 +533,106 @@ func hostCredentialIn(text string) string {
 		if close < 0 || text[cursor+1+close] != text[cursor] {
 			continue
 		}
-		if value := text[cursor+1 : cursor+1+close]; len(value) >= 8 && secretLike(value, strongValue) {
-			return literal + ": " + value
+		if value := text[cursor+1 : cursor+1+close]; len(value) >= 8 && secretLike(value, strongValue) && emit(cursor+1, cursor+1+close, "host-keyed-password") {
+			return true
 		}
 	}
-	return ""
+	return false
+}
+
+// prefixedTokenIn finds vendor-style tokens without a key: a short lowercase
+// prefix and separator (hcaik_, fm2_, sk_org_, xoxe-3-) followed by a long,
+// high-entropy body.
+func prefixedTokenIn(text string, emit emitFunc) bool {
+	for offset := 0; offset < len(text); {
+		start := offset
+		for start < len(text) && !isLower(text[start]) {
+			start++
+		}
+		if start >= len(text) {
+			return false
+		}
+		if start > 0 && (isWordByte(text[start-1]) || text[start-1] == '-' || text[start-1] == '.' || text[start-1] == '/') {
+			offset = start + 1
+			continue
+		}
+		end := start
+		for end < len(text) && (isWordByte(text[end]) || text[end] == '-' || text[end] == '+' || text[end] == '/' || text[end] == '=' || text[end] == '.') {
+			end++
+		}
+		offset = end + 1
+		token := strings.TrimRight(text[start:end], ".")
+		if integrityPrefix(token) {
+			continue
+		}
+		cut := strings.IndexAny(token, "_-")
+		if cut < 2 || cut > 12 {
+			continue
+		}
+		body := strings.TrimLeft(token[cut+1:], "_-")
+		if second := strings.IndexAny(body, "_-"); second > 0 && second <= 6 {
+			body = body[second+1:]
+		}
+		if len(body) < 24 || !randomSegment(body) {
+			continue
+		}
+		if emit(start, start+len(token), "prefixed-token") {
+			return true
+		}
+	}
+	return false
+}
+
+// integrityPrefix reports Subresource Integrity and similar digest strings
+// (sha512-…, md5-…): hashes of public content, not credentials.
+func integrityPrefix(token string) bool {
+	for _, prefix := range []string{"sha1-", "sha256-", "sha384-", "sha512-", "md5-"} {
+		if strings.HasPrefix(token, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// randomSegment reports a body with one long random run: identifiers such as
+// test_change_view_logs or sentry-api-0-organization are short words joined
+// by separators, vendor token bodies are one long run of mixed characters.
+func randomSegment(body string) bool {
+	longest := ""
+	for _, part := range strings.FieldsFunc(body, func(r rune) bool { return strings.ContainsRune("_-./+=", r) }) {
+		if len(part) > len(longest) {
+			longest = part
+		}
+	}
+	return len(longest) >= 20 && mixedToken(longest) && entropy(longest) >= 3.6 && wordShare(longest) < 0.45
+}
+
+// wordShare is the share of bytes in runs of four or more lowercase letters:
+// high for identifiers made of words (breakInIterationOrSwitchStatement),
+// low for random tokens, where such runs are rare.
+func wordShare(value string) float64 {
+	inWords, run := 0, 0
+	for index := 0; index <= len(value); index++ {
+		if index < len(value) && isLower(value[index]) {
+			run++
+			continue
+		}
+		if run >= 4 {
+			inWords += run
+		}
+		run = 0
+	}
+	return float64(inWords) / float64(len(value))
+}
+
+func mixedToken(value string) bool {
+	var lower, upper, digit bool
+	for _, c := range []byte(value) {
+		lower = lower || isLower(c)
+		upper = upper || isUpper(c)
+		digit = digit || (c >= '0' && c <= '9')
+	}
+	return digit && (lower || upper) && !identifierLike(value)
 }
 
 func stripScheme(literal string) string {

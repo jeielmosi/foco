@@ -92,6 +92,37 @@ func (b *Betterleaks) scan(ctx context.Context, path string, content io.Reader) 
 	return found, firstErr
 }
 
+// Spans returns every Betterleaks finding with the byte range of its secret,
+// located on the finding's line.
+func (b *Betterleaks) Spans(ctx context.Context, path string, content []byte) ([]Span, error) {
+	detector, err := b.acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { b.pool <- detector }()
+	var out []Span
+	var firstErr error
+	// Scan the bytes in hand as one fragment: the Run pipeline would re-read
+	// them through an archive sniffer and a fragment channel per file.
+	fragment := sources.Fragment{Raw: string(content)}
+	fragment.SetAttr(sources.AttrPath, path)
+	for _, finding := range detector.DetectContext(ctx, fragment) {
+		if finding.RuleID == "" {
+			continue
+		}
+		value := finding.Secret
+		if value == "" {
+			value = finding.Match
+		}
+		start := locate(content, []byte(value), lineOffset(content, finding.StartLine)+max(0, finding.StartColumn-1))
+		if start < 0 {
+			continue
+		}
+		out = append(out, Span{Start: start, End: start + len(value), Rule: finding.RuleID, Engine: "betterleaks"})
+	}
+	return out, firstErr
+}
+
 func (b *Betterleaks) Close() error { return nil }
 
 var _ Engine = (*Betterleaks)(nil)

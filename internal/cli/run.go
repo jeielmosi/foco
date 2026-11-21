@@ -27,6 +27,8 @@ Root defaults to the current directory; use -- before a root beginning with -.
 Commands:
   auth            Choose an API schema and save its endpoint credentials
   doctor          Verify API access using a synthetic question
+  scan PATH...    Report the secrets foco would exclude, with byte ranges;
+                  --json prints one JSON object per finding. Exit 1 if any.
   skill           Install the agent skill via npx skills
   --help, -h      Show usage
   --version       Show the installed version
@@ -176,6 +178,8 @@ func RunContext(ctx context.Context, args []string, stdin io.Reader, stdout, std
 		return skillCode
 	case KindSearch:
 		return runSearch(ctx, command.Search, out, stderr)
+	case KindScan:
+		return runScan(ctx, command.Scan, out, stderr)
 	default:
 		fmt.Fprintln(out, "Command failed. Check the root, permissions, credentials, and network.")
 		return 1

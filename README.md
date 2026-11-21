@@ -195,6 +195,17 @@ Exit codes are `0` for a complete or bounded partial search, `1` for a failed
 search, `2` for an incomplete search with an operational issue, and `130` when
 interrupted. All output goes to stdout.
 
+`foco scan` runs the secret detector on its own, without a provider, and
+reports what a search would exclude:
+
+    foco scan --json path/to/dir path/to/file
+
+Each finding names the file, the secret's byte range (`start`, `end`), line,
+column, rule and engine. It runs every engine on every file: the credential
+heuristics, Titus and Betterleaks. It exits `0` when nothing is found, `1` when
+something is, and `2` on read errors. `bench/redact-secret/` compares it with
+other scanners on the redact-secret benchmark corpus.
+
 Install the agent skill when you want an agent to invoke Foco directly:
 
     foco skill --agent NAME --yes

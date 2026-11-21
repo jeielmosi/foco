@@ -24,6 +24,7 @@ const (
 	KindDoctor
 	KindSkill
 	KindSearch
+	KindScan
 )
 
 type PolicyOptions struct {
@@ -49,6 +50,11 @@ type SkillOptions struct {
 	Yes    bool
 }
 
+type ScanOptions struct {
+	Paths []string
+	JSON  bool
+}
+
 type SearchOptions struct {
 	Query          string
 	Root           string
@@ -66,6 +72,7 @@ type SearchOptions struct {
 
 type Command struct {
 	Kind   Kind
+	Scan   ScanOptions
 	Auth   AuthOptions
 	Skill  SkillOptions
 	Search SearchOptions
@@ -192,7 +199,7 @@ func newRootCommand(target *Command) *cobra.Command {
 	flags.Bool("list", false, "")
 	_ = flags.MarkHidden("stdin")
 	_ = flags.MarkHidden("list")
-	root.AddCommand(newAuthCommand(target), newDoctorCommand(target), newSkillCommand(target))
+	root.AddCommand(newAuthCommand(target), newDoctorCommand(target), newSkillCommand(target), newScanCommand(target))
 	return root
 }
 
@@ -223,6 +230,25 @@ func newAuthCommand(target *Command) *cobra.Command {
 	cmd.Flags().String("endpoint", "", "")
 	cmd.Flags().String("model", "", "")
 	cmd.Flags().Bool("stdin", false, "")
+	return cmd
+}
+
+func newScanCommand(target *Command) *cobra.Command {
+	cmd := &cobra.Command{
+		Use: "scan",
+		Args: func(_ *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return usageError("Usage: foco scan [--json] PATH...")
+			}
+			return nil
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			asJSON, _ := cmd.Flags().GetBool("json")
+			*target = Command{Kind: KindScan, Scan: ScanOptions{Paths: args, JSON: asJSON}}
+			return nil
+		},
+	}
+	cmd.Flags().Bool("json", false, "")
 	return cmd
 }
 

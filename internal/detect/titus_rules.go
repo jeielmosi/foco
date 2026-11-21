@@ -25,16 +25,20 @@ const titusContextLines = 2
 // never empties a non-empty set, so running rules separately gives the same
 // verdict as running them together.
 type titusRules struct {
-	all      []*types.Rule
-	always   matcher.Matcher
-	rules    []*types.Rule
-	matchers []matcher.Matcher
-	words    *ahocorasick.Matcher
-	wordRule [][]int
+	secretGroup map[string]string
+	all         []*types.Rule
+	always      matcher.Matcher
+	rules       []*types.Rule
+	matchers    []matcher.Matcher
+	words       *ahocorasick.Matcher
+	wordRule    [][]int
 }
 
 func newTitusRules(rules []*types.Rule, prefilter bool) (*titusRules, error) {
-	out := &titusRules{all: rules}
+	out := &titusRules{all: rules, secretGroup: map[string]string{}}
+	for _, rule := range rules {
+		out.secretGroup[rule.ID] = rule.SecretGroup
+	}
 	var always []*types.Rule
 	wordIndex := map[string]int{}
 	var words []string
@@ -118,6 +122,52 @@ func (t *titusRules) match(content []byte) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// spans returns every match with the byte range of its secret capture.
+func (t *titusRules) spans(content []byte) ([]Span, error) {
+	var out []Span
+	add := func(found []*types.Match) {
+		for _, match := range found {
+			start, end := int(match.Location.Offset.Start), int(match.Location.Offset.End)
+			if start < 0 || end > len(content) || start >= end {
+				continue
+			}
+			if secret := matcher.SecretCapture(match, t.secretGroup[match.RuleID]); len(secret) > 0 {
+				if index := bytes.Index(content[start:end], secret); index >= 0 {
+					start, end = start+index, start+index+len(secret)
+				}
+			}
+			out = append(out, Span{Start: start, End: end, Rule: match.RuleID, Engine: "titus"})
+		}
+	}
+	if t.always != nil {
+		found, err := t.always.Match(content)
+		if err != nil {
+			return nil, err
+		}
+		add(found)
+	}
+	if t.words == nil {
+		return out, nil
+	}
+	candidates := map[int]struct{}{}
+	for _, word := range t.words.MatchThreadSafe(bytes.ToLower(content)) {
+		for _, position := range t.wordRule[word] {
+			candidates[position] = struct{}{}
+		}
+	}
+	for position := range t.rules {
+		if _, ok := candidates[position]; !ok {
+			continue
+		}
+		found, err := t.matchers[position].Match(content)
+		if err != nil {
+			return nil, err
+		}
+		add(found)
+	}
+	return out, nil
 }
 
 func (t *titusRules) close() error {

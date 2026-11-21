@@ -57,6 +57,28 @@ func detectContent(ctx context.Context, engine Engine, path string, content []by
 	return engine.DetectPath(ctx, path)
 }
 
+// Spans runs every engine on content (no short-circuit, and Betterleaks on
+// every path, not only config paths) and returns their merged findings.
+func (u *Union) Spans(ctx context.Context, path string, content []byte) ([]Span, error) {
+	var out []Span
+	for _, engine := range []any{u.credentials, u.titus, u.better} {
+		detector, ok := engine.(SpanDetector)
+		if !ok {
+			continue
+		}
+		spans, err := detector.Spans(ctx, path, content)
+		if err != nil {
+			return nil, err
+		}
+		for _, span := range spans {
+			if keepSpan(content, span) {
+				out = append(out, span)
+			}
+		}
+	}
+	return mergeSpans(out), nil
+}
+
 // Ready reports whether the engines that load in the background loaded. A
 // failure there makes every scan fail, so callers check it to fail the whole
 // search instead of reporting files as unreadable.
@@ -85,6 +107,7 @@ var secondPassExtensions = map[string]struct{}{
 
 var _ Engine = (*Union)(nil)
 var _ ContentDetector = (*Union)(nil)
+var _ SpanDetector = (*Union)(nil)
 
 func needsSecondPass(path string, c *catalog.Catalog) bool {
 	lower := strings.ToLower(path)

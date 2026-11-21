@@ -154,6 +154,24 @@ func (t *Titus) DetectContent(ctx context.Context, _ string, content []byte) (bo
 	return scanner.match(content)
 }
 
+func (t *Titus) Spans(ctx context.Context, _ string, content []byte) ([]Span, error) {
+	scanner, err := t.ready(ctx)
+	if err != nil {
+		return nil, err
+	}
+	weight := scanWeight(len(content), t.slots)
+	if err := t.cpu.acquire(ctx, weight); err != nil {
+		return nil, err
+	}
+	defer t.cpu.release(weight)
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.closed {
+		return nil, errors.New("detect: engine closed")
+	}
+	return scanner.spans(content)
+}
+
 func scanWeight(size, slots int) int {
 	switch {
 	case size < titusParallelThreshold:

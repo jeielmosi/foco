@@ -29,6 +29,8 @@ func TestCredentialsFindsHandWrittenSecrets(t *testing.T) {
 		{"a.py", `redis = "localhost:S3cretPa55!"`},
 		{"a.go", `dbPassword := "hunter2!Prod"`},
 		{"a.rb", `:password => "hunter2!Prod"`},
+		{"a.txt", "hcaik_08i0m7zr8oh91jo1wschvj0q17wsy6wsxrn7w65u1apgrkbxtojsgbhl2p"},
+		{"a.txt", `value="fm2_mnRq57u4OnWb/kpVgT4Etw9S82mQH3rV0fNWDLphnHpyGiPt2zMF3qrkOBqRMC6THWeRygJk"`},
 		{"a.json", `{"aws_secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`},
 	} {
 		if credentialMatch(c.path, c.text) == "" {
@@ -127,6 +129,10 @@ func TestCredentialsIgnoresOrdinaryCode(t *testing.T) {
 		{"a.rb", `password: "queenbee#passwords"`},
 		{"a.py", `{"PASSWORD": "some:password"}`},
 		{"a.rb", `password: "[FILTERED]"`},
+		{"a.py", `def test_tuple_in_subquery_must_have_2_fields(self): pass`},
+		{"a.py", `url = "sentry-api-0-organization-repository-details"`},
+		{"a.html", `integrity="sha384-BVYiiSIFeK1dGmJRAkycuHAHRg32OmUcww7on3RYdg4Va+PmSTsz/K68vbdEjh4u"`},
+		{"a.ts", `import "./parser_breakInIterationOrSwitchStatement4.ts"`},
 	} {
 		if match := credentialMatch(c.path, c.text); match != "" {
 			t.Errorf("false positive %q in %s", match, c.text)
@@ -182,9 +188,9 @@ func BenchmarkCredentialRules(b *testing.B) {
 		name string
 		run  func()
 	}{
-		{"aws", func() { awsKeyIDIn(text) }},
-		{"keyed", func() { keyedValueIn(text, false) }},
-		{"host", func() { hostCredentialIn(text) }},
+		{"aws", func() { awsKeyIDIn(text, func(int, int, string) bool { return true }) }},
+		{"keyed", func() { keyedValueIn(text, false, func(int, int, string) bool { return true }) }},
+		{"host", func() { hostCredentialIn(text, func(int, int, string) bool { return true }) }},
 		{"all", func() { credentialMatch(path, text) }},
 	} {
 		b.Run(rule.name, func(b *testing.B) {
