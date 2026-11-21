@@ -346,17 +346,21 @@ func (c *Client) attempt(ctx context.Context, body []byte, request Request) (map
 	if failure := c.waitForCapacity(ctx); failure != nil {
 		return nil, failure, false, 0
 	}
-	if !c.takeRequest() {
-		return nil, &Failure{Kind: enums.FailureRequestLimit, Message: "The request limit for this search has been reached."}, false, 0
-	}
 	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	// Wait for the shared connection before charging the request budget, so a
+	// request that never leaves (cancellation, authentication failure) is not
+	// counted.
 	requestContext, err := c.awaitConnection(requestContext)
 	if err != nil {
 		if failure := c.interruption(ctx); failure != nil {
 			return nil, failure, false, 0
 		}
 		return nil, &Failure{Kind: enums.FailureCancelled, Message: "API evaluation cancelled."}, false, 0
+	}
+	if !c.takeRequest() {
+		c.markConnected()
+		return nil, &Failure{Kind: enums.FailureRequestLimit, Message: "The request limit for this search has been reached."}, false, 0
 	}
 	httpRequest, err := http.NewRequestWithContext(requestContext, http.MethodPost, c.profile.Endpoint, bytes.NewReader(body))
 	if err != nil {

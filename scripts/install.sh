@@ -68,6 +68,7 @@ install_libhs() {
 		log "bundling $name from $path into ${DESTDIR}${LIBDIR}"
 		"$INSTALL" -m 0644 "$path" "${DESTDIR}${LIBDIR}/$name" || exit 1
 	done || die "could not bundle libhs"
+	"$INSTALL" -m 0644 "$PROJECT/licenses/vectorscan.txt" "${DESTDIR}${LIBDIR}/LICENSE.libhs" || die "could not install the libhs license"
 }
 
 install_binary "$source_bin"
