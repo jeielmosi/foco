@@ -52,13 +52,18 @@ jobs:
             -suite "${{ inputs.suite || 'small' }}" \
             -repo-url "${{ github.server_url }}/${{ github.repository }}" \
             -out bench-results
+      - name: Job summary
+        if: always()
+        run: test -f bench-results/report.md && cat bench-results/report.md >> "$GITHUB_STEP_SUMMARY" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: benchmark-results
           path: bench-results
+      # Fork pull requests get a read-only token, so they only get the job
+      # summary and artifact.
       - name: Comment on pull request
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/github-script@v7
         with:
           script: |

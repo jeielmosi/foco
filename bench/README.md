@@ -75,5 +75,5 @@ Label a pull request `benchmark` to have `.github/workflows/benchmark.yml` run
 the small suite for its base and head commits and post the report as a
 comment, updated on every push. Shared GitHub runners are noisy, so read the
 relative columns, and rerun locally for claims that depend on absolute times.
-Pull requests from forks only get the results as a workflow artifact, because
-their token cannot comment.
+Pull requests from forks get the report in the workflow's job summary and as
+an artifact instead of a comment, because their token cannot comment.
