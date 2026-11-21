@@ -8,7 +8,6 @@ import (
 	"runtime"
 	"sync"
 
-	titus "github.com/praetorian-inc/titus"
 	"github.com/praetorian-inc/titus/pkg/rule"
 )
 
@@ -34,7 +33,7 @@ const titusExclusiveThreshold = 256 << 10
 // busy without starving any regex toward Titus's per-match timeout.
 type Titus struct {
 	mu      sync.RWMutex
-	scanner *titus.Scanner
+	scanner *titusRules
 	closed  bool
 	cpu     *cpuSlots
 	slots   int
@@ -74,16 +73,16 @@ func (c *cpuSlots) release(n int) {
 	}
 }
 
-// NewTitus returns a Titus engine backed by a new Titus scanner.
+// NewTitus returns a Titus engine over the builtin Titus rules.
 // Noisy rules are excluded, matching the default behaviour of `titus scan`.
 func NewTitus() (*Titus, error) {
 	rules, err := rule.NewLoader().LoadBuiltinRules()
 	if err != nil {
 		return nil, fmt.Errorf("detect: loading titus rules: %w", err)
 	}
-	scanner, err := titus.NewScanner(titus.WithRules(rule.FilterNoisy(rules, false)))
+	scanner, err := newTitusRules(rule.FilterNoisy(rules, false), prefilterTitusRules)
 	if err != nil {
-		return nil, fmt.Errorf("detect: creating titus scanner: %w", err)
+		return nil, err
 	}
 	slots := max(1, runtime.GOMAXPROCS(0))
 	return &Titus{scanner: scanner, cpu: newCPUSlots(slots), slots: slots}, nil
@@ -125,11 +124,7 @@ func (t *Titus) DetectContent(ctx context.Context, _ string, content []byte) (bo
 	if t.closed {
 		return false, errors.New("detect: engine closed")
 	}
-	findings, err := t.scanner.ScanBytesWithFindings(ctx, content)
-	if err != nil {
-		return false, err
-	}
-	return len(findings) > 0, nil
+	return t.scanner.match(content)
 }
 
 func scanWeight(size, slots int) int {
@@ -151,5 +146,5 @@ func (t *Titus) Close() error {
 		return nil
 	}
 	t.closed = true
-	return t.scanner.Close()
+	return t.scanner.close()
 }

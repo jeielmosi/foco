@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 
 	"foco/internal/config"
 	"foco/internal/detect/catalog"
@@ -28,6 +29,9 @@ func runSearch(ctx context.Context, opts SearchOptions, stdout, stderr io.Writer
 	if err != nil {
 		return finish(stdout, err)
 	}
+	// --parallel caps the CPU cores the whole search may use. Secret detection
+	// is the CPU-heavy part and sizes its worker pools from this limit.
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(max(1, opts.Parallel)))
 	detector, err := newDetector()
 	if err != nil {
 		return finish(stdout, err)

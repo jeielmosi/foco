@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -53,6 +54,7 @@ type SearchOptions struct {
 	Root           string
 	NoCache        bool
 	Concurrency    int
+	Parallel       int
 	MaxRequests    int
 	MaxSourceBytes int64
 	MaxOutputBytes int64
@@ -125,7 +127,7 @@ func isVersionToken(arg string) bool { return arg == "--version" || arg == "-v" 
 // another flag, matching the way pflag consumes a following token.
 var valueFlagNames = map[string]bool{
 	"schema": true, "endpoint": true, "model": true, "agent": true,
-	"concurrency": true, "max-requests": true, "max-source-bytes": true,
+	"concurrency": true, "parallel": true, "max-requests": true, "max-source-bytes": true,
 	"max-output-bytes": true, "exclude": true, "only": true, "exclude-types": true,
 }
 
@@ -169,6 +171,7 @@ func newRootCommand(target *Command) *cobra.Command {
 	})
 	flags := root.Flags()
 	flags.String("concurrency", "", "")
+	flags.String("parallel", "", "")
 	flags.String("max-requests", "", "")
 	flags.String("max-source-bytes", "", "")
 	flags.String("max-output-bytes", "", "")
@@ -271,7 +274,7 @@ func searchRaw(cmd *cobra.Command, positionals []string) rawArgs {
 	} {
 		collectBool(&raw, cmd, name)
 	}
-	for _, name := range []string{"concurrency", "max-requests", "max-source-bytes", "max-output-bytes"} {
+	for _, name := range []string{"concurrency", "parallel", "max-requests", "max-source-bytes", "max-output-bytes"} {
 		collectString(&raw, cmd, name)
 	}
 	for _, name := range []string{"exclude", "only", "exclude-types"} {
@@ -370,7 +373,7 @@ func parseSearch(raw rawArgs) (Command, error) {
 		return Command{}, usageError(`Usage: foco "question" [root]. Run foco --help.`)
 	}
 	for key := range raw.values {
-		if !isPolicyFlag(key) && key != "no-cache" && key != "concurrency" && key != "max-requests" &&
+		if !isPolicyFlag(key) && key != "no-cache" && key != "concurrency" && key != "parallel" && key != "max-requests" &&
 			key != "max-source-bytes" && key != "max-output-bytes" && key != "no-locations" {
 			return Command{}, usageError(`Usage: foco "question" [root]. Run foco --help.`)
 		}
@@ -381,7 +384,7 @@ func parseSearch(raw rawArgs) (Command, error) {
 	}
 	search := SearchOptions{
 		Query: raw.positionals[0], Root: root, NoCache: raw.has("no-cache"),
-		Concurrency: 32, MaxRequests: 1000, MaxOutputBytes: 256000,
+		Concurrency: 32, Parallel: DefaultParallel(), MaxRequests: 1000, MaxOutputBytes: 256000,
 		NoLocations: raw.has("no-locations"),
 	}
 	var err error
@@ -389,6 +392,16 @@ func parseSearch(raw rawArgs) (Command, error) {
 		search.Concurrency, err = positiveInt("concurrency", raw.one("concurrency"))
 		if err != nil {
 			return Command{}, err
+		}
+	}
+	if raw.has("parallel") {
+		value, parseErr := digits(raw.one("parallel"))
+		if parseErr != nil || value > 4096 {
+			return Command{}, usageError("--parallel must be an integer from 0 (all CPU cores) to 4096.")
+		}
+		search.Parallel = int(value)
+		if search.Parallel == 0 {
+			search.Parallel = runtime.NumCPU()
 		}
 	}
 	if raw.has("max-requests") {
@@ -415,6 +428,12 @@ func parseSearch(raw rawArgs) (Command, error) {
 	}
 	search.Policy = policy
 	return Command{Kind: KindSearch, Search: search}, nil
+}
+
+// DefaultParallel is the CPU cores a search uses by default: half of them, so
+// a search never saturates the machine it runs on.
+func DefaultParallel() int {
+	return max(1, runtime.NumCPU()/2)
 }
 
 func isPolicyFlag(key string) bool {

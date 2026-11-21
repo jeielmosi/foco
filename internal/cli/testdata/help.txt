@@ -42,6 +42,7 @@ Search options:
   --exclude PATTERN       Skip paths matching a gitignore pattern; repeatable
   --no-cache              Disable cache reads and writes
   --concurrency N         Limit in-flight API requests; try 1–4 on slow networks
+  --parallel N            CPU cores to use; 0 means all (default: half)
 
 File categories: code, config, docs, data, audio, video, archives, logs, temp, unknown. Classification uses filenames;
 extensionless scripts with a recognised code shebang (Python, Node, Bun, tsx,
