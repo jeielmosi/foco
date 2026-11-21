@@ -149,6 +149,11 @@ want_accelerated() {
 
 build_accelerated() {
 	log "building with Hyperscan/Vectorscan"
+	if [ "$(uname -s)" = "Linux" ]; then
+		# Also search a libhs copy installed next to the binary (see install.sh),
+		# so an installed foco does not depend on where libhs was found at build time.
+		export CGO_LDFLAGS="${CGO_LDFLAGS:-} -Wl,-rpath,\$ORIGIN/../lib/foco"
+	fi
 	CGO_ENABLED=1 "$GO" build -tags "$FOCO_TAGS" -trimpath -o "$BIN" ./cmd/cli
 }
 

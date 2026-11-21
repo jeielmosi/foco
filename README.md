@@ -95,9 +95,15 @@ one, then tries Homebrew or the system package manager with passwordless
 `sudo`. Without root on Fedora or Debian/Ubuntu, it downloads the distribution
 package with `dnf download` or `apt-get download`, unpacks it into
 `~/.local/share/foco/vectorscan` (override with `FOCO_VECTORSCAN_PREFIX`) and
-links the binary to it; that directory must then stay in place. If none of
-these work, it falls back to the portable pure-Go engine without prompting for
-a password.
+links the binary to it. If none of these work, it falls back to the portable
+pure-Go engine without prompting for a password.
+
+Vectorscan is a shared library (`libhs`), not a separate program. On Linux,
+`make install` copies the exact `libhs` the binary was linked against to
+`$PREFIX/lib/foco`, where the installed binary looks for it, so it keeps
+working after the build-time copy or the system package changes. If the
+installed binary still cannot start, `make install` installs the pure-Go build
+instead. `make uninstall` removes both.
 
     make            # gofmt + vet + tests, then build bin/foco
     make install    # install to ~/.local/bin/foco

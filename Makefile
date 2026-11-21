@@ -49,6 +49,7 @@ install-pure:
 
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/foco"
+	rm -rf "$(DESTDIR)$(dir $(BINDIR))lib/foco"
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
