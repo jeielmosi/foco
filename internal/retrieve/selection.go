@@ -414,7 +414,11 @@ func selectFile(
 			evidencePointer = &evidence
 		}
 		request := requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group), declarationsFor(group), evidencePointer)
-		if len(group) > 1 && stateSize(request.State) > SelectionStateBytes {
+		// Split an oversized group only when a single window would fit: when the
+		// shared parts (evidence, opening context) alone exceed the budget,
+		// splitting multiplies requests without making any of them fit.
+		if len(group) > 1 && stateSize(request.State) > SelectionStateBytes &&
+			stateSize(requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group[:1]), declarationsFor(group[:1]), evidencePointer).State) <= SelectionStateBytes {
 			middle := (len(group) + 1) / 2
 			queue = append([][]window{group[:middle], group[middle:]}, queue...)
 			groupCount++
