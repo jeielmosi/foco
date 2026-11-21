@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"foco/internal/enums"
@@ -20,15 +21,23 @@ import (
 func itoa(value int) string { return strconv.Itoa(value) }
 
 type parityEvaluator struct {
+	mu       sync.Mutex
 	requests int
 	sent     []string
 }
 
-func (e *parityEvaluator) Requests() int { return e.requests }
+func (e *parityEvaluator) Requests() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.requests
+}
+
 func (e *parityEvaluator) Evaluate(_ context.Context, request provider.Request, _ provider.EvalOptions) (map[string]float64, error) {
-	e.requests++
 	blob, _ := json.Marshal(request)
+	e.mu.Lock()
+	e.requests++
 	e.sent = append(e.sent, string(blob))
+	e.mu.Unlock()
 	out := map[string]float64{}
 	switch state := request.State.(type) {
 	case requests.NavigationRequestState:

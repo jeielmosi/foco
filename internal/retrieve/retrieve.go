@@ -64,15 +64,6 @@ func (r *runState) load(ctx context.Context, relative string) (*files.Snapshot, 
 	return &snapshot, enums.UnknownFileIssueKind
 }
 
-func (r *runState) snapshot(ctx context.Context, relative string) (*files.Snapshot, bool) {
-	snapshot, issue := r.load(ctx, relative)
-	if issue != enums.UnknownFileIssueKind {
-		r.issues.add(retrievalIssueForFileIssue(issue))
-		return nil, false
-	}
-	return snapshot, snapshot != nil
-}
-
 func (r *runState) validate(ctx context.Context, donors []Donor) bool {
 	for _, donor := range donors {
 		result := r.reader.ReadSnapshotReuse(ctx, absPath(r.root, donor.Path))
@@ -95,22 +86,26 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 	}
 	navigator := newNavigator(ctx, input.Query, evaluator, state.issues, func(item requests.NavigationItem) []Donor {
 		return discovery.Donors[item.Path]
-	}, state.validate, func(ctx context.Context, relative string) bool {
-		snapshot, ok := state.snapshot(ctx, relative)
-		if !ok {
-			return false
+	}, state.validate, func(ctx context.Context, relative string) probeOutcome {
+		snapshot, issue := state.load(ctx, relative)
+		if issue != enums.UnknownFileIssueKind {
+			return probeOutcome{apply: func() { state.issues.add(retrievalIssueForFileIssue(issue)) }}
+		}
+		if snapshot == nil {
+			return probeOutcome{}
 		}
 		result, err := selectFile(ctx, *snapshot, input.Query, WeakScoreCeiling, evaluator, nil, nil)
 		if err != nil {
-			return false
+			return probeOutcome{}
 		}
-		mergeSelectionIssues(state.issues, result)
+		outcome := probeOutcome{apply: func() { mergeSelectionIssues(state.issues, result) }}
 		for _, decision := range result.File.SourceDecisions {
 			if decision.Score > SourceConfidenceBoundary {
-				return true
+				outcome.confident = true
+				break
 			}
 		}
-		return false
+		return outcome
 	})
 	if err := discover(ctx, state.root, reader, input.Query, []string{"."}, nil, navigator, state.issues.add, state.issues.fatal, state.report, discovery); err != nil {
 		return RetrievalResult{}, err
@@ -129,18 +124,33 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 		}
 	}
 	ordered := sortedCandidates(discovery)
+	// Role assessment and the first source-selection pass are independent, so
+	// they run concurrently. Their outcomes are merged afterwards in the
+	// sequential order: assessments first, then selection.
 	assessments := map[string]assessment{}
+	var assessed []assessmentOutcome
+	var assessing sync.WaitGroup
 	if !state.issues.fatal() {
-		outcomes := make([]assessmentOutcome, len(ordered))
-		parallelCandidates(ordered, func(index int, entry candidate) {
-			if ctx.Err() != nil || state.issues.fatal() {
-				return
-			}
-			result, failure := assessFile(ctx, evaluator, input.Query, entry, discovery.Previews[entry.Path])
-			outcomes[index] = assessmentOutcome{result: &result, failure: failure}
-		})
+		assessed = make([]assessmentOutcome, len(ordered))
+		assessing.Add(1)
+		go func() {
+			defer assessing.Done()
+			parallelCandidates(ordered, func(index int, entry candidate) {
+				if ctx.Err() != nil || state.issues.fatal() {
+					return
+				}
+				result, failure := assessFile(ctx, evaluator, input.Query, entry, discovery.Previews[entry.Path])
+				assessed[index] = assessmentOutcome{result: &result, failure: failure}
+			})
+		}()
+	}
+	mergeAssessments := func() {
+		assessing.Wait()
 		for index, entry := range ordered {
-			outcome := outcomes[index]
+			if assessed == nil {
+				break
+			}
+			outcome := assessed[index]
 			if outcome.failure != nil {
 				recordFailure(state.issues, outcome.failure)
 				continue
@@ -152,7 +162,7 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 	}
 	filesByPath := map[string]FileEvidence{}
 	groupsByPath := map[string]int{}
-	selectPass := func(evidence []requests.Evidence) {
+	selectOutcomes := func(evidence []requests.Evidence) []selectionOutcome {
 		outcomes := make([]selectionOutcome, len(ordered))
 		parallelCandidates(ordered, func(index int, entry candidate) {
 			if ctx.Err() != nil || state.issues.fatal() {
@@ -207,6 +217,9 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 			}
 			outcomes[index].result = &result
 		})
+		return outcomes
+	}
+	mergeSelection := func(outcomes []selectionOutcome) {
 		for index, entry := range ordered {
 			outcome := outcomes[index]
 			if outcome.issue != enums.UnknownFileIssueKind {
@@ -225,7 +238,13 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 			groupsByPath[entry.Path] = outcome.result.Groups
 		}
 	}
-	selectPass(nil)
+	first := selectOutcomes(nil)
+	mergeAssessments()
+	// A fatal assessment failure stops the sequential flow before selection
+	// starts, so its selection outcomes are discarded.
+	if !state.issues.fatal() {
+		mergeSelection(first)
+	}
 	evidence := []requests.Evidence{}
 	if !state.issues.fatal() && ctx.Err() == nil {
 		donors := make([]string, 0, len(filesByPath))
@@ -257,7 +276,7 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 			evidence = []requests.Evidence{}
 		}
 		if len(evidence) > 0 {
-			selectPass(evidence)
+			mergeSelection(selectOutcomes(evidence))
 		}
 	}
 	for path, result := range assessments {
@@ -320,14 +339,14 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 			status = enums.RetrievalStatusInterrupted
 		}
 		return RetrievalResult{
-				Root: state.root, Query: input.Query, Status: status, Files: finalFiles,
-				Issues: state.issues.list(), ProviderFailure: state.issues.failureMessage(),
-				Counts: Counts{
-					Requests: evaluator.Requests(), CacheHits: 0, InspectedFiles: len(state.inspected),
-				},
-			}, &provider.Failure{
-				Kind: enums.FailureAuthentication, Message: "API authentication failed.",
-			}
+			Root: state.root, Query: input.Query, Status: status, Files: finalFiles,
+			Issues: state.issues.list(), ProviderFailure: state.issues.failureMessage(),
+			Counts: Counts{
+				Requests: evaluator.Requests(), CacheHits: cacheHits(evaluator), InspectedFiles: len(state.inspected),
+			},
+		}, &provider.Failure{
+			Kind: enums.FailureAuthentication, Message: "API authentication failed.",
+		}
 	}
 	contextResult, err := gatherRepositoryContext(ctx, reader, finalFiles)
 	if err != nil {
@@ -351,7 +370,7 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 		Issues: state.issues.list(), ProviderFailure: state.issues.failureMessage(),
 		RepositoryContext: contextResult,
 		Counts: Counts{
-			Requests: evaluator.Requests(), CacheHits: 0, InspectedFiles: len(state.inspected),
+			Requests: evaluator.Requests(), CacheHits: cacheHits(evaluator), InspectedFiles: len(state.inspected),
 		},
 	}, nil
 }
@@ -393,6 +412,14 @@ func recordFailure(issues *issueSet, failure *provider.Failure) {
 		return
 	}
 	issues.add(retrievalIssueForProviderFailure(failure.Kind))
+}
+
+// cacheHits reports in-memory answer reuse when the evaluator tracks it.
+func cacheHits(evaluator Evaluator) int {
+	if counter, ok := evaluator.(interface{ CacheHits() int }); ok {
+		return counter.CacheHits()
+	}
+	return 0
 }
 
 func serializedSize(value any) int {

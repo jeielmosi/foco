@@ -3,6 +3,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,26 @@ type Client struct {
 	requests   int
 	authFailed bool
 	cooldown   time.Time
+
+	memoMu sync.Mutex
+	memo   map[memoKey]*memoCall
+	hits   int
+}
+
+// pooledClient returns an HTTP client whose connection pool can keep one idle
+// connection per concurrent request. http.DefaultClient keeps only two idle
+// connections per host, so a search running 32 requests at a time would close
+// and re-handshake (TCP + TLS) most connections after every response.
+func pooledClient(concurrency int) *http.Client {
+	base, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		return http.DefaultClient
+	}
+	transport := base.Clone()
+	transport.MaxIdleConns = max(transport.MaxIdleConns, 2*concurrency)
+	transport.MaxIdleConnsPerHost = concurrency
+	transport.ForceAttemptHTTP2 = true
+	return &http.Client{Transport: transport}
 }
 
 func New(profile config.Profile, apiKey string, options Options) *Client {
@@ -94,7 +115,7 @@ func New(profile config.Profile, apiKey string, options Options) *Client {
 	}
 	httpClient := options.HTTPClient
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = pooledClient(concurrency)
 	}
 	now := options.Now
 	if now == nil {
@@ -115,6 +136,30 @@ func (c *Client) Requests() int {
 	return c.requests
 }
 
+// CacheHits reports evaluations answered from this client's in-memory memo.
+func (c *Client) CacheHits() int {
+	c.memoMu.Lock()
+	defer c.memoMu.Unlock()
+	return c.hits
+}
+
+type memoKey struct {
+	body       [sha256.Size]byte
+	navigation bool
+}
+
+type memoCall struct {
+	done   chan struct{}
+	scores map[string]float64
+	ok     bool
+}
+
+// Evaluate sends request to the decision endpoint. Within one client (one
+// search), an identical request body is sent at most once at a time and a
+// successful answer is reused: a search often asks the same question twice,
+// for example when a navigation probe and the later source selection score the
+// same file windows. Nothing is persisted, and failures are never reused; a
+// caller that waited on a failed identical request makes its own attempt.
 func (c *Client) Evaluate(ctx context.Context, request Request, options EvalOptions) (map[string]float64, error) {
 	if c.schema == nil {
 		return nil, &Failure{Kind: enums.FailureProvider, Message: "Unsupported API schema."}
@@ -123,6 +168,58 @@ func (c *Client) Evaluate(ctx context.Context, request Request, options EvalOpti
 	if err != nil {
 		return nil, &Failure{Kind: enums.FailureProvider, Message: "Invalid evaluation request."}
 	}
+	key := memoKey{body: sha256.Sum256(body), navigation: options.Navigation}
+	for {
+		c.memoMu.Lock()
+		if c.memo == nil {
+			c.memo = map[memoKey]*memoCall{}
+		}
+		call, found := c.memo[key]
+		if !found {
+			call = &memoCall{done: make(chan struct{})}
+			c.memo[key] = call
+			c.memoMu.Unlock()
+			scores, err := c.evaluate(ctx, body, request, options)
+			c.memoMu.Lock()
+			if err == nil {
+				call.scores, call.ok = scores, true
+			} else {
+				delete(c.memo, key)
+			}
+			c.memoMu.Unlock()
+			close(call.done)
+			return copyScores(scores), err
+		}
+		c.memoMu.Unlock()
+		select {
+		case <-call.done:
+		case <-ctx.Done():
+			if failure := c.interruption(ctx); failure != nil {
+				return nil, failure
+			}
+			return nil, &Failure{Kind: enums.FailureCancelled, Message: "API evaluation cancelled."}
+		}
+		if call.ok {
+			c.memoMu.Lock()
+			c.hits++
+			c.memoMu.Unlock()
+			return copyScores(call.scores), nil
+		}
+	}
+}
+
+func copyScores(scores map[string]float64) map[string]float64 {
+	if scores == nil {
+		return nil
+	}
+	out := make(map[string]float64, len(scores))
+	for key, value := range scores {
+		out[key] = value
+	}
+	return out
+}
+
+func (c *Client) evaluate(ctx context.Context, body []byte, request Request, options EvalOptions) (map[string]float64, error) {
 	multiple := len(request.Questions) > 1
 	attemptLimit := 2
 	if options.Navigation && multiple {

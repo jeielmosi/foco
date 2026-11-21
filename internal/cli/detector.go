@@ -12,18 +12,28 @@ func newDetector() (detect.Engine, error) {
 	if err != nil {
 		return nil, err
 	}
-	titus, err := detect.NewTitus()
-	if err != nil {
-		return nil, err
-	}
 	workers := runtime.GOMAXPROCS(0)
 	if workers > 8 {
 		workers = 8
 	}
-	better, err := detect.NewBetterleaks(workers)
-	if err != nil {
-		_ = titus.Close()
-		return nil, err
+	// Rule compilation for the two engines is independent; overlap it.
+	type built struct {
+		engine *detect.Betterleaks
+		err    error
 	}
-	return detect.NewUnion(titus, better, catalogValue), nil
+	pending := make(chan built, 1)
+	go func() {
+		engine, err := detect.NewBetterleaks(workers)
+		pending <- built{engine, err}
+	}()
+	titus, titusErr := detect.NewTitus()
+	better := <-pending
+	if titusErr != nil {
+		return nil, titusErr
+	}
+	if better.err != nil {
+		_ = titus.Close()
+		return nil, better.err
+	}
+	return detect.NewUnion(titus, better.engine, catalogValue), nil
 }

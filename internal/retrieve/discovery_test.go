@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"foco/internal/enums"
@@ -126,8 +127,10 @@ func TestDiscoverCancellationStopsEntryProcessing(t *testing.T) {
 	if err := discover(ctx, "/root", reader, "event", []string{"."}, nil, discoveryNavigator(fileScores), issues.add, issues.fatal, report, state); err != nil {
 		t.Fatal(err)
 	}
-	if len(reader.snapshots) != 1 || reader.snapshots[0] != "/root/a.ts" {
-		t.Fatalf("snapshots = %v, want only /root/a.ts", reader.snapshots)
+	// Snapshots are prefetched concurrently, so later entries may already be
+	// read when cancellation lands; they must not be processed or reported.
+	if len(reader.snapshots) == 0 || len(reader.snapshots) > 3 {
+		t.Fatalf("snapshots = %v", reader.snapshots)
 	}
 	if len(reported) != 1 || reported[0] != "a.ts" {
 		t.Fatalf("reported = %v, want [a.ts]", reported)
@@ -306,13 +309,16 @@ type discoveryReader struct {
 	listPage  func(context.Context, string, int) (files.Page, error)
 	snapshot  func(context.Context, string) files.SnapshotResult
 	lists     []string
+	mu        sync.Mutex
 	snapshots []string
 }
 
 func (r *discoveryReader) Root() string { return r.root }
 
 func (r *discoveryReader) ListPage(ctx context.Context, directory string, offset int) (files.Page, error) {
+	r.mu.Lock()
 	r.lists = append(r.lists, fmt.Sprintf("%s@%d", directory, offset))
+	r.mu.Unlock()
 	if r.listPage != nil {
 		return r.listPage(ctx, directory, offset)
 	}
@@ -320,7 +326,9 @@ func (r *discoveryReader) ListPage(ctx context.Context, directory string, offset
 }
 
 func (r *discoveryReader) ReadSnapshotReuse(ctx context.Context, path string) files.SnapshotResult {
+	r.mu.Lock()
 	r.snapshots = append(r.snapshots, path)
+	r.mu.Unlock()
 	if r.snapshot != nil {
 		return r.snapshot(ctx, path)
 	}

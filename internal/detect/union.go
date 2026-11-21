@@ -51,6 +51,37 @@ func (u *Union) DetectPath(ctx context.Context, path string) (bool, error) {
 	return u.better.DetectPath(ctx, path)
 }
 
+// DetectContent applies the same union to content already read from path.
+// Engines that cannot scan bytes fall back to reading path themselves.
+func (u *Union) DetectContent(ctx context.Context, path string, content []byte) (bool, error) {
+	if u.all {
+		first, firstErr := detectContent(ctx, u.titus, path, content)
+		second, secondErr := detectContent(ctx, u.better, path, content)
+		if firstErr != nil {
+			return false, firstErr
+		}
+		if secondErr != nil {
+			return false, secondErr
+		}
+		return first || second, nil
+	}
+	excluded, err := detectContent(ctx, u.titus, path, content)
+	if err != nil || excluded {
+		return excluded, err
+	}
+	if !needsSecondPass(path, u.catalog) {
+		return false, nil
+	}
+	return detectContent(ctx, u.better, path, content)
+}
+
+func detectContent(ctx context.Context, engine Engine, path string, content []byte) (bool, error) {
+	if scanner, ok := engine.(ContentDetector); ok {
+		return scanner.DetectContent(ctx, path, content)
+	}
+	return engine.DetectPath(ctx, path)
+}
+
 func (u *Union) Close() error {
 	var first error
 	if err := u.titus.Close(); err != nil {
@@ -68,6 +99,7 @@ var secondPassExtensions = map[string]struct{}{
 }
 
 var _ Engine = (*Union)(nil)
+var _ ContentDetector = (*Union)(nil)
 
 func needsSecondPass(path string, c *catalog.Catalog) bool {
 	lower := strings.ToLower(path)

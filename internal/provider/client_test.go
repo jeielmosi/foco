@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -177,13 +178,80 @@ func TestRequestLimitStopsBeforeNetwork(t *testing.T) {
 	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{})
+	other := testRequest()
+	other.State = map[string]string{"other": "state"}
+	_, err := client.Evaluate(context.Background(), other, EvalOptions{})
 	var failure *Failure
 	if !errors.As(err, &failure) || failure.Kind != enums.FailureRequestLimit {
 		t.Fatalf("got %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("calls: %d", calls)
+	}
+}
+
+func TestIdenticalRequestsShareOneNetworkCall(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		<-release
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{RequestLimit: 1})
+	var wait sync.WaitGroup
+	errs := make([]error, 4)
+	for index := range errs {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, errs[index] = client.Evaluate(context.Background(), testRequest(), EvalOptions{})
+		}()
+	}
+	for client.Requests() == 0 {
+		runtime.Gosched()
+	}
+	close(release)
+	wait.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || client.Requests() != 1 || client.CacheHits() != 4 {
+		t.Fatalf("calls = %d requests = %d hits = %d", calls, client.Requests(), client.CacheHits())
+	}
+}
+
+func TestFailedRequestIsNotReused(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{})
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err == nil {
+		t.Fatal("want failure")
+	}
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || client.CacheHits() != 0 {
+		t.Fatalf("calls = %d hits = %d", calls, client.CacheHits())
 	}
 }
 

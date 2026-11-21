@@ -23,14 +23,14 @@ type levelDirectory struct {
 	Depth int
 }
 
-func listEntries(ctx context.Context, reader Reader, directory string, remaining int, issue func(enums.RetrievalIssueCode), fatal func() bool) ([]files.Entry, bool, bool) {
+func listEntries(ctx context.Context, list pageLister, directory string, remaining int, issue func(enums.RetrievalIssueCode), fatal func() bool) ([]files.Entry, bool, bool) {
 	entries := []files.Entry{}
 	offset := 0
 	for {
 		if fatal != nil && fatal() {
 			return entries, false, false
 		}
-		page, err := reader.ListPage(ctx, directory, offset)
+		page, err := list(ctx, directory, offset)
 		if err != nil {
 			if ctx.Err() != nil {
 				issue(enums.IssueCodeInterrupted)
@@ -87,8 +87,10 @@ func discover(
 		for _, directory := range directories {
 			level = append(level, levelDirectory{Path: directory, Depth: 0})
 		}
+		next := directories
 		directories = []string{}
 		items := []requests.NavigationItem{}
+		ahead := startReadAhead(ctx, reader, root, next)
 		for index := 0; index < len(level) && !stopped(); index++ {
 			current := level[index]
 			if state.EntriesSeen >= DiscoveryLimit {
@@ -100,7 +102,7 @@ func discover(
 			}
 			state.Visited[current.Path] = true
 			full := absPath(root, current.Path)
-			entries, ok, limited := listEntries(ctx, reader, full, DiscoveryLimit-state.EntriesSeen, issue, fatal)
+			entries, ok, limited := listEntries(ctx, ahead.listPage, full, DiscoveryLimit-state.EntriesSeen, issue, fatal)
 			if limited {
 				reportLimit()
 			}
@@ -130,13 +132,13 @@ func discover(
 					item := requests.NavigationItem{Path: relative, Kind: enums.NavigationKindDirectory, ChildPreview: preview}
 					if anchor != nil {
 						var donors []Donor
-						item, donors = withDirectoryContent(ctx, reader, item, issue, report)
+						item, donors = withDirectoryContent(ctx, reader, item, issue, report, nil)
 						state.Donors[relative] = donors
 					}
 					items = append(items, item)
 					continue
 				}
-				result := reader.ReadSnapshotReuse(ctx, entry.Path)
+				result := ahead.get(ctx, entry.Path)
 				if result.Status == enums.SnapshotStatusIssue {
 					issue(retrievalIssueForFileIssue(result.Issue))
 					continue
@@ -172,6 +174,7 @@ func discover(
 				items = append(items, item)
 			}
 		}
+		ahead.stop()
 		classified := []scoredItem{}
 		if fatal != nil && fatal() {
 			return nil

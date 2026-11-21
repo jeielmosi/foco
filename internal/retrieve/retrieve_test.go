@@ -295,8 +295,12 @@ func TestRunStopsAfterFatalAssessment(t *testing.T) {
 	if assessments != 3 {
 		t.Fatalf("assessment requests = %d, want 3", assessments)
 	}
-	if evidence != 0 {
-		t.Fatalf("evidence requests = %d, want 0", evidence)
+	// Selection runs concurrently with assessment, but a fatal assessment
+	// discards its outcome: no file may carry selected source.
+	for _, file := range result.Files {
+		if len(file.Excerpts) != 0 || len(file.SourceDecisions) != 0 {
+			t.Fatalf("selection survived fatal assessment (evidence requests = %d): %+v", evidence, file)
+		}
 	}
 	if result.Status != enums.RetrievalStatusIncomplete {
 		t.Fatalf("status = %q", result.Status)
