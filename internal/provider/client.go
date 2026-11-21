@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 
@@ -85,6 +87,10 @@ type Client struct {
 
 	prefetchSlots chan struct{}
 	prefetchOff   bool
+
+	connected chan struct{}
+	dialing   sync.Once
+	leading   atomic.Bool
 }
 
 // pooledClient returns an HTTP client whose connection pool can keep one idle
@@ -130,6 +136,7 @@ func New(profile config.Profile, apiKey string, options Options) *Client {
 		requestLimit: requestLimit, now: now, sleep: options.Sleep,
 		slots: make(chan struct{}, concurrency), authDone: make(chan struct{}),
 		prefetchSlots: make(chan struct{}, max(1, concurrency/2)),
+		connected:     make(chan struct{}),
 	}
 	return client
 }
@@ -344,13 +351,22 @@ func (c *Client) attempt(ctx context.Context, body []byte, request Request) (map
 	}
 	requestContext, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	requestContext, err := c.awaitConnection(requestContext)
+	if err != nil {
+		if failure := c.interruption(ctx); failure != nil {
+			return nil, failure, false, 0
+		}
+		return nil, &Failure{Kind: enums.FailureCancelled, Message: "API evaluation cancelled."}, false, 0
+	}
 	httpRequest, err := http.NewRequestWithContext(requestContext, http.MethodPost, c.profile.Endpoint, bytes.NewReader(body))
 	if err != nil {
+		c.markConnected()
 		return nil, &Failure{Kind: enums.FailureProvider, Message: "Invalid API endpoint."}, false, 0
 	}
 	c.schema.setAuthentication(httpRequest, c.apiKey)
 	httpRequest.Header.Set("Content-Type", "application/json")
 	response, err := c.httpClient.Do(httpRequest)
+	c.markConnected()
 	if err != nil {
 		if failure := c.interruption(ctx); failure != nil {
 			return nil, failure, false, 0
@@ -394,6 +410,30 @@ func (c *Client) attempt(ctx context.Context, body []byte, request Request) (map
 	}
 	return scores, nil, false, response.StatusCode
 }
+
+// awaitConnection lets the first request of a search open the provider
+// connection alone. Every other request waits until that connection exists,
+// so with HTTP/2 the first burst of up to --concurrency requests multiplexes
+// over one connection instead of each dialing and handshaking its own. With
+// HTTP/1.1 the waiters then dial as before, having waited only for one
+// connection setup that they would have paid themselves.
+func (c *Client) awaitConnection(ctx context.Context) (context.Context, error) {
+	if c.leading.CompareAndSwap(false, true) {
+		return httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) { c.markConnected() },
+		}), nil
+	}
+	select {
+	case <-c.connected:
+		return ctx, nil
+	case <-ctx.Done():
+		return ctx, ctx.Err()
+	case <-c.authDone:
+		return ctx, errors.New("authentication failed")
+	}
+}
+
+func (c *Client) markConnected() { c.dialing.Do(func() { close(c.connected) }) }
 
 func (c *Client) waitForCapacity(ctx context.Context) *Failure {
 	for {

@@ -81,24 +81,24 @@ func requestSize(request provider.Request) int {
 func groupNavigation(query string, items []requests.NavigationItem, anchor *requests.RelationAnchor, batchSize, batchBytes int, issue func(enums.RetrievalIssueCode)) [][]requests.NavigationItem {
 	var groups [][]requests.NavigationItem
 	current := []requests.NavigationItem{}
+	sizer := requests.NewNavigationSizer(query, anchor)
 	flush := func() {
 		if len(current) > 0 {
 			groups = append(groups, current)
 			current = []requests.NavigationItem{}
+			sizer.Reset()
 		}
 	}
 	for _, item := range items {
-		if requestSize(requests.NavigationRequest(query, []requests.NavigationItem{item}, anchor)) > batchBytes {
+		if sizer.Empty()+sizer.Entry(0, item) > batchBytes {
 			issue(enums.IssueCodeRequestSize)
 			continue
 		}
-		if len(current) > 0 {
-			candidate := append(append([]requests.NavigationItem{}, current...), item)
-			if len(current) >= min(batchSize, MaxQuestionsPerRequest) ||
-				requestSize(requests.NavigationRequest(query, candidate, anchor)) > batchBytes {
-				flush()
-			}
+		if len(current) > 0 && (len(current) >= min(batchSize, MaxQuestionsPerRequest) ||
+			sizer.With(sizer.Entry(len(current), item)) > batchBytes) {
+			flush()
 		}
+		sizer.Add(sizer.Entry(len(current), item))
 		current = append(current, item)
 	}
 	flush()

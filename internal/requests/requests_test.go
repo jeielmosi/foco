@@ -251,3 +251,29 @@ func TestAssessmentRequestEmptyPreview(t *testing.T) {
 		t.Fatalf("assessment guidance = %q, want %q", state.Guidance, goldenAssessmentGuidance)
 	}
 }
+
+func TestNavigationSizerMatchesFullEncoding(t *testing.T) {
+	anchors := []*RelationAnchor{nil, {Path: "a.go", Classes: []string{"Widget"}}}
+	items := []NavigationItem{
+		{Path: "src/a<b>.ts", Kind: enums.NavigationKindFile, FilePreview: &FilePreview{Text: "export const a = \"&\";\n", SizeBytes: 22}},
+		{Path: "src", Kind: enums.NavigationKindDirectory, ChildPreview: &DirectoryPreview{Entries: []DirectoryEntry{{Name: "x", Kind: enums.NavigationKindFile}}}},
+		{Path: "b.go", Kind: enums.NavigationKindFile, SourceRange: &Range{StartLine: 3, EndLine: 9}},
+	}
+	for _, anchor := range anchors {
+		sizer := NewNavigationSizer("q \"x\"", anchor)
+		for count := 1; count <= 12; count++ {
+			batch := make([]NavigationItem, count)
+			for index := range batch {
+				batch[index] = items[index%len(items)]
+			}
+			sizer.Reset()
+			for index, item := range batch {
+				sizer.Add(sizer.Entry(index, item))
+			}
+			blob, _ := json.Marshal(NavigationRequest("q \"x\"", batch, anchor))
+			if got := sizer.With(0) - 2; got != len(blob) {
+				t.Fatalf("anchor=%v count=%d: sizer %d, encoded %d", anchor != nil, count, got, len(blob))
+			}
+		}
+	}
+}

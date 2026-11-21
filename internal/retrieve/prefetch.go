@@ -11,6 +11,7 @@ import (
 	"foco/internal/enums"
 	"foco/internal/files"
 	"foco/internal/provider"
+	"foco/internal/requests"
 )
 
 // readWorkers bounds concurrent snapshot reads. Reads mix I/O with content
@@ -80,23 +81,56 @@ func startCandidatePrefetch(ctx context.Context, evaluator Evaluator, reader Rea
 	warm := prefetchEvaluator{inner: source}
 	child, cancel := context.WithCancel(ctx)
 	var running sync.WaitGroup
+	var mu sync.Mutex
+	type job struct {
+		path    string
+		preview *requests.FilePreview
+		assess  bool
+	}
+	queue := []job{}
+	active := 0
+	work := func(next job) {
+		if next.assess {
+			_, _ = assessFile(child, warm, query, candidate{Path: next.path}, next.preview)
+			return
+		}
+		relative := next.path
+		result := reader.ReadSnapshotReuse(child, absPath(reader.Root(), relative))
+		if result.Status != enums.SnapshotStatusSnapshot || result.Snapshot == nil {
+			return
+		}
+		snapshot := *result.Snapshot
+		snapshot.Path = relative
+		_, _ = selectFile(child, snapshot, query, 0, warm, nil, nil)
+	}
+	// A fixed pool of StageWorkers drains the admitted paths, so a repository
+	// with thousands of candidates never holds thousands of goroutines or reads
+	// at once. Assessment and selection are separate jobs, so a worker waiting
+	// on one request never holds back the other.
 	discovery.Admitted = func(relative string) {
 		preview := discovery.Previews[relative]
-		running.Add(2)
-		go func() {
-			defer running.Done()
-			_, _ = assessFile(child, warm, query, candidate{Path: relative}, preview)
-		}()
-		go func() {
-			defer running.Done()
-			result := reader.ReadSnapshotReuse(child, absPath(reader.Root(), relative))
-			if result.Status != enums.SnapshotStatusSnapshot || result.Snapshot == nil {
-				return
-			}
-			snapshot := *result.Snapshot
-			snapshot.Path = relative
-			_, _ = selectFile(child, snapshot, query, 0, warm, nil, nil)
-		}()
+		mu.Lock()
+		defer mu.Unlock()
+		queue = append(queue, job{path: relative, preview: preview, assess: true}, job{path: relative})
+		for spawned := 0; spawned < 2 && active < StageWorkers; spawned++ {
+			active++
+			running.Add(1)
+			go func() {
+				defer running.Done()
+				for {
+					mu.Lock()
+					if len(queue) == 0 || child.Err() != nil {
+						active--
+						mu.Unlock()
+						return
+					}
+					next := queue[0]
+					queue = queue[1:]
+					mu.Unlock()
+					work(next)
+				}
+			}()
+		}
 	}
 	var once sync.Once
 	return func() {

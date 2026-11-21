@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"foco/internal/enums"
@@ -171,34 +172,7 @@ func NavigationRequest(query string, batch []NavigationItem, anchor *RelationAnc
 	items := make([]NavigationItemState, len(batch))
 	questions := make([]provider.Question, len(batch))
 	for index, item := range batch {
-		items[index] = NavigationItemState{
-			ID: fmt.Sprintf("n%d", index), Path: item.Path, Kind: item.Kind,
-			SourceRange: item.SourceRange, FilePreview: item.FilePreview, ChildPreview: item.ChildPreview,
-		}
-		instructions := ""
-		switch {
-		case anchor != nil && item.SourceRange == nil:
-			instructions = fmt.Sprintf(
-				"For state.items[%d] (%s), does the provided source in this item alone show a concrete code relationship to a class named in relationAnchor.classes: declaring it, subclassing it, overriding its methods, or directly using it? Judge the source relationship, even if the query names a different platform. Similar concepts or naming without an actual code relationship do not count. Source in other items does not establish a relationship for this item.",
-				index, jsonString(item.Path),
-			)
-		case item.Kind == enums.NavigationKindDirectory:
-			instructions = fmt.Sprintf(
-				"Is directory %s worth exploring for this query? Use childPreview filenames and sample metadata as evidence. A truncated preview is not proof useful descendants are absent. This judges navigation potential, not all descendants.",
-				jsonString(item.Path),
-			)
-		case item.SourceRange != nil:
-			instructions = fmt.Sprintf(
-				"Does source range %d-%d of %s contain code or a regression test directly useful for resolving this query? Judge this range itself, not the general relevance of the file. A useful range implements the affected behavior, demonstrates it, or explains a necessary supporting call. Generic shared terminology is insufficient.",
-				item.SourceRange.StartLine, item.SourceRange.EndLine, jsonString(item.Path),
-			)
-		default:
-			instructions = fmt.Sprintf(
-				"Does the provided source for file %s provide concrete implementation, caller, metadata, backend, or test evidence that would help a coding agent investigate the requested behavior? Judge the relationship to the query, not whether the file itself is the final edit site. Shared code counts when it controls or carries the affected behavior; generic terminology, unrelated utilities and incidental imports do not. Multiple files can be useful; there is no count target.",
-				jsonString(item.Path),
-			)
-		}
-		questions[index] = provider.Question{ID: fmt.Sprintf("q%d", index), Instructions: instructions}
+		items[index], questions[index] = navigationEntry(index, item, anchor)
 	}
 	return provider.Request{
 		State: NavigationRequestState{
@@ -206,6 +180,87 @@ func NavigationRequest(query string, batch []NavigationItem, anchor *RelationAnc
 		},
 		Questions: questions,
 	}
+}
+
+// NavigationSizer computes the serialized size of a growing navigation
+// request incrementally. JSON encodes each item and question independently,
+// so the size of a batch is the size of the empty request plus each entry and
+// one comma per separator; Size equals len(json.Marshal(NavigationRequest(...)))
+// without re-encoding the whole batch for every added item.
+type NavigationSizer struct {
+	anchor *RelationAnchor
+	empty  int
+	sum    int
+	count  int
+}
+
+func NewNavigationSizer(query string, anchor *RelationAnchor) *NavigationSizer {
+	blob, _ := json.Marshal(NavigationRequest(query, nil, anchor))
+	return &NavigationSizer{anchor: anchor, empty: len(blob)}
+}
+
+// Entry returns the bytes item adds when appended at position index.
+func (s *NavigationSizer) Entry(index int, item NavigationItem) int {
+	state, question := navigationEntry(index, item, s.anchor)
+	stateBlob, err := json.Marshal(state)
+	if err != nil {
+		return math.MaxInt / 4
+	}
+	questionBlob, _ := json.Marshal(question)
+	return len(stateBlob) + len(questionBlob)
+}
+
+// With returns the size the request would have with one more entry of size entry.
+func (s *NavigationSizer) With(entry int) int {
+	separators := 0
+	if s.count > 0 {
+		separators = 2
+	}
+	return s.empty + s.sum + separators + entry
+}
+
+func (s *NavigationSizer) Add(entry int) {
+	s.sum += entry
+	if s.count > 0 {
+		s.sum += 2
+	}
+	s.count++
+}
+
+func (s *NavigationSizer) Reset() { s.sum, s.count = 0, 0 }
+
+// Empty is the size of the request with no items.
+func (s *NavigationSizer) Empty() int { return s.empty }
+
+func navigationEntry(index int, item NavigationItem, anchor *RelationAnchor) (NavigationItemState, provider.Question) {
+	state := NavigationItemState{
+		ID: fmt.Sprintf("n%d", index), Path: item.Path, Kind: item.Kind,
+		SourceRange: item.SourceRange, FilePreview: item.FilePreview, ChildPreview: item.ChildPreview,
+	}
+	instructions := ""
+	switch {
+	case anchor != nil && item.SourceRange == nil:
+		instructions = fmt.Sprintf(
+			"For state.items[%d] (%s), does the provided source in this item alone show a concrete code relationship to a class named in relationAnchor.classes: declaring it, subclassing it, overriding its methods, or directly using it? Judge the source relationship, even if the query names a different platform. Similar concepts or naming without an actual code relationship do not count. Source in other items does not establish a relationship for this item.",
+			index, jsonString(item.Path),
+		)
+	case item.Kind == enums.NavigationKindDirectory:
+		instructions = fmt.Sprintf(
+			"Is directory %s worth exploring for this query? Use childPreview filenames and sample metadata as evidence. A truncated preview is not proof useful descendants are absent. This judges navigation potential, not all descendants.",
+			jsonString(item.Path),
+		)
+	case item.SourceRange != nil:
+		instructions = fmt.Sprintf(
+			"Does source range %d-%d of %s contain code or a regression test directly useful for resolving this query? Judge this range itself, not the general relevance of the file. A useful range implements the affected behavior, demonstrates it, or explains a necessary supporting call. Generic shared terminology is insufficient.",
+			item.SourceRange.StartLine, item.SourceRange.EndLine, jsonString(item.Path),
+		)
+	default:
+		instructions = fmt.Sprintf(
+			"Does the provided source for file %s provide concrete implementation, caller, metadata, backend, or test evidence that would help a coding agent investigate the requested behavior? Judge the relationship to the query, not whether the file itself is the final edit site. Shared code counts when it controls or carries the affected behavior; generic terminology, unrelated utilities and incidental imports do not. Multiple files can be useful; there is no count target.",
+			jsonString(item.Path),
+		)
+	}
+	return state, provider.Question{ID: fmt.Sprintf("q%d", index), Instructions: instructions}
 }
 
 type AssessmentState struct {

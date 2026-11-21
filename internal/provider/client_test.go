@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -285,6 +287,59 @@ func TestPrefetchStopsAfterRateLimit(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("prefetch calls = %d, want 1", calls)
+	}
+}
+
+func burst(t *testing.T, tls bool) (connections int64, elapsed time.Duration) {
+	t.Helper()
+	var opened atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, answersBody())
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	if tls {
+		server.EnableHTTP2 = true
+		server.StartTLS()
+	} else {
+		server.Start()
+	}
+	defer server.Close()
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 16
+	transport.ForceAttemptHTTP2 = true
+	client := New(systemOneProfile(server), "key", Options{Concurrency: 16, HTTPClient: &http.Client{Transport: transport}})
+	started := time.Now()
+	var wait sync.WaitGroup
+	for index := range 16 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			request := testRequest()
+			request.State = map[string]int{"index": index}
+			if _, err := client.Evaluate(context.Background(), request, EvalOptions{}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wait.Wait()
+	return opened.Load(), time.Since(started)
+}
+
+func TestFirstBurstSharesOneHTTP2Connection(t *testing.T) {
+	if connections, _ := burst(t, true); connections != 1 {
+		t.Fatalf("HTTP/2 burst opened %d connections, want 1", connections)
+	}
+}
+
+func TestFirstBurstStaysConcurrentOverHTTP1(t *testing.T) {
+	connections, elapsed := burst(t, false)
+	if elapsed > 400*time.Millisecond || connections < 2 {
+		t.Fatalf("HTTP/1.1 burst took %v over %d connections; requests were serialized", elapsed, connections)
 	}
 }
 

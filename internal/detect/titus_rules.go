@@ -3,7 +3,6 @@ package detect
 import (
 	"bytes"
 	"fmt"
-	"sync"
 
 	"github.com/cloudflare/ahocorasick"
 	"github.com/praetorian-inc/titus/pkg/matcher"
@@ -29,15 +28,9 @@ type titusRules struct {
 	all      []*types.Rule
 	always   matcher.Matcher
 	rules    []*types.Rule
-	matchers []lazyMatcher
+	matchers []matcher.Matcher
 	words    *ahocorasick.Matcher
 	wordRule [][]int
-}
-
-type lazyMatcher struct {
-	once    sync.Once
-	matcher matcher.Matcher
-	err     error
 }
 
 func newTitusRules(rules []*types.Rule, prefilter bool) (*titusRules, error) {
@@ -67,7 +60,15 @@ func newTitusRules(rules []*types.Rule, prefilter bool) (*titusRules, error) {
 			out.wordRule[index] = append(out.wordRule[index], position)
 		}
 	}
-	out.matchers = make([]lazyMatcher, len(out.rules))
+	out.matchers = make([]matcher.Matcher, len(out.rules))
+	for position, rule := range out.rules {
+		compiled, err := newTitusMatcher(matcher.Config{Rules: []*types.Rule{rule}, ContextLines: titusContextLines})
+		if err != nil {
+			_ = out.close()
+			return nil, fmt.Errorf("detect: creating titus matcher: %w", err)
+		}
+		out.matchers[position] = compiled
+	}
 	if len(always) > 0 {
 		compiled, err := newTitusMatcher(matcher.Config{Rules: always, ContextLines: titusContextLines})
 		if err != nil {
@@ -108,11 +109,7 @@ func (t *titusRules) match(content []byte) (bool, error) {
 		if _, ok := candidates[position]; !ok {
 			continue
 		}
-		compiled, err := t.matcher(position)
-		if err != nil {
-			return false, err
-		}
-		found, err := compiled.Match(content)
+		found, err := t.matchers[position].Match(content)
 		if err != nil {
 			return false, err
 		}
@@ -123,31 +120,14 @@ func (t *titusRules) match(content []byte) (bool, error) {
 	return false, nil
 }
 
-// matcher compiles a prefiltered rule on its first candidate file, so rules
-// whose literals never appear cost nothing.
-func (t *titusRules) matcher(position int) (matcher.Matcher, error) {
-	lazy := &t.matchers[position]
-	lazy.once.Do(func() {
-		lazy.matcher, lazy.err = newTitusMatcher(matcher.Config{
-			Rules: []*types.Rule{t.rules[position]}, ContextLines: titusContextLines,
-		})
-		if lazy.err != nil {
-			lazy.err = fmt.Errorf("detect: creating titus matcher: %w", lazy.err)
-		}
-	})
-	return lazy.matcher, lazy.err
-}
-
 func (t *titusRules) close() error {
 	var first error
 	if t.always != nil {
 		first = t.always.Close()
 	}
-	for index := range t.matchers {
-		lazy := &t.matchers[index]
-		lazy.once.Do(func() {})
-		if lazy.matcher != nil {
-			if err := lazy.matcher.Close(); err != nil && first == nil {
+	for _, compiled := range t.matchers {
+		if compiled != nil {
+			if err := compiled.Close(); err != nil && first == nil {
 				first = err
 			}
 		}
