@@ -181,6 +181,19 @@ case "$MODE" in
 		log "could not install libhs"
 		exit 1
 		;;
+	test|--test)
+		# Runs go test with the accelerated tag, using the same libhs discovery
+		# as builds (system, Homebrew, or the local download). Exits 3 when no
+		# libhs is available so callers can treat that as "skipped".
+		add_brew_path
+		add_local_path
+		if ! have_libhs && ! ensure_vectorscan; then
+			log "libhs not found; skipping Vectorscan tests"
+			exit 3
+		fi
+		# shellcheck disable=SC2086
+		CGO_ENABLED=1 "$GO" test -tags "$FOCO_TAGS" ${FOCO_TEST_FLAGS:-} ${FOCO_TEST_PKGS:-./...}
+		;;
 	build|--build)
 		mkdir -p "$(dirname "$BIN")"
 		rm -f "$BIN"
