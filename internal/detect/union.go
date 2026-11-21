@@ -57,6 +57,16 @@ func detectContent(ctx context.Context, engine Engine, path string, content []by
 	return engine.DetectPath(ctx, path)
 }
 
+// Ready reports whether the engines that load in the background loaded. A
+// failure there makes every scan fail, so callers check it to fail the whole
+// search instead of reporting files as unreadable.
+func (u *Union) Ready(ctx context.Context) error {
+	if loader, ok := u.titus.(interface{ Ready(context.Context) error }); ok {
+		return loader.Ready(ctx)
+	}
+	return nil
+}
+
 func (u *Union) Close() error {
 	var first error
 	if err := u.titus.Close(); err != nil {

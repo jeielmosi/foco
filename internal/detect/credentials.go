@@ -30,24 +30,56 @@ func NewCredentials() *Credentials { return &Credentials{} }
 // secretKeywords name values that are secrets themselves. serviceKeywords
 // name services whose values are as often a database name or file path as a
 // password, so their values must look strongly like a password.
+// passwordKeywords name human-chosen passwords, which may have no digits.
 var (
-	secretKeywords  = []string{"pass", "pwd", "secret", "token", "api_key", "api-key", "apikey", "access_key", "access-key", "private_key", "private-key", "credential", "dbpass", "db_pass", "db-pass", "conn_str", "connstr", "connection_string", "connectionstring"}
-	serviceKeywords = []string{"smtp", "postgres", "mysql", "mariadb", "redis", "mongo", "database"}
-	keywordMatcher  = ahocorasick.NewStringMatcher(append(append([]string{}, secretKeywords...), serviceKeywords...))
-	versionLike     = regexp.MustCompile(`^v?\d+(?:\.\d+)+`)
-	pathLike        = regexp.MustCompile(`^-?[\w.-]*(?:/[\w.-]+)+$`)
-	constantLike    = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
+	passwordKeywords = []string{"password", "passwd", "passphrase", "pass", "pwd", "dbpass", "db_pass", "db-pass"}
+	secretKeywords   = []string{"secret", "token", "api_key", "api-key", "apikey", "access_key", "access-key", "private_key", "private-key", "credential", "conn_str", "connstr", "connection_string", "connectionstring"}
+	serviceKeywords  = []string{"smtp", "postgres", "mysql", "mariadb", "redis", "mongo", "database"}
+	keywords         = func() []keyword {
+		out := []keyword{}
+		for _, word := range passwordKeywords {
+			out = append(out, keyword{text: []byte(word), password: true})
+		}
+		for _, word := range secretKeywords {
+			out = append(out, keyword{text: []byte(word)})
+		}
+		for _, word := range serviceKeywords {
+			out = append(out, keyword{text: []byte(word), strong: true})
+		}
+		return out
+	}()
+	keywordMatcher = func() *ahocorasick.Matcher {
+		words := make([]string, len(keywords))
+		for index, word := range keywords {
+			words[index] = string(word.text)
+		}
+		return ahocorasick.NewStringMatcher(words)
+	}()
+	versionLike  = regexp.MustCompile(`^v?\d+(?:\.\d+)+`)
+	pathLike     = regexp.MustCompile(`^-?[\w.-]*(?:/[\w.-]+)+$`)
+	constantLike = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 )
 
 var placeholders = []string{
 	"${", "{{", "%s", "%(", "<", ">", "xxxx", "****", "....", "changeme", "change_me", "placeholder",
 	"your_", "your-", "yourpass", "redacted", "dummy", "process.env", "os.environ", "getenv", "config.",
-	"settings.", "env[", "env.", "secrets.", "vault:", "()", "[]", "\\n", "{", "}", "%2f",
+	"settings.", "env[", "env.", "secrets.", "vault:", "()", "[]", "\\n", "{", "}", "%2f", "test", "fake", "sample", "[filtered]",
 }
+
+// valueKind says how strict secretLike is: service keys and host pairs need a
+// strong password, password keys also accept passphrases without digits.
+type valueKind int
+
+const (
+	plainValue valueKind = iota
+	passwordValue
+	strongValue
+)
 
 // secretLike reports whether value looks like a password or key rather than
 // an identifier, path, URL, version or number.
-func secretLike(value string, strong bool) bool {
+func secretLike(value string, kind valueKind) bool {
+	strong := kind == strongValue
 	if len(value) < 8 || len(value) > 512 {
 		return false
 	}
@@ -86,8 +118,14 @@ func secretLike(value string, strong bool) bool {
 			classes++
 		}
 	}
-	if !hasDigit {
+	if !hasSymbol && identifierLike(value) {
 		return false
+	}
+	if !hasDigit {
+		// A passphrase such as "correct-horse-battery-staple!". The symbol
+		// must be one people add to passwords, not a separator such as the
+		// ":" of "user:name" or the "#" of a route like "users#index".
+		return kind == passwordValue && strings.ContainsAny(value, "!@$%^&*+=?~") && (hasLower || hasUpper) && len(value) >= 10
 	}
 	if strong {
 		return hasSymbol && hasDigit && (hasLower || hasUpper) && classes >= 3
@@ -96,6 +134,31 @@ func secretLike(value string, strong bool) bool {
 		return true
 	}
 	return len(value) >= 16 && entropy(value) >= 3.5
+}
+
+// identifierLike reports names such as "X-Api-Key-V2" or "Foo-Bar1-Baz":
+// words joined by separators, each letters with at most two trailing digits.
+func identifierLike(value string) bool {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == '-' || r == '_' || r == '.' })
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		letters := 0
+		for letters < len(part) && ((part[letters] >= 'a' && part[letters] <= 'z') || (part[letters] >= 'A' && part[letters] <= 'Z')) {
+			letters++
+		}
+		digits := len(part) - letters
+		if letters == 0 || digits > 2 {
+			return false
+		}
+		for _, c := range []byte(part[letters:]) {
+			if c < '0' || c > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // keyLike reports long mixed-case, high-entropy values such as AWS secret
@@ -156,6 +219,9 @@ func credentialMatch(path, text string) string {
 	if match := keyedValueIn(text, bare); match != "" {
 		return match
 	}
+	if match := urlCredentialIn(text); match != "" {
+		return match
+	}
 	return hostCredentialIn(text)
 }
 
@@ -209,20 +275,47 @@ func asciiLower(text string) []byte {
 }
 
 type keyword struct {
-	text   []byte
-	strong bool
+	text     []byte
+	strong   bool
+	password bool
 }
 
-var keywords = func() []keyword {
-	out := []keyword{}
-	for _, word := range secretKeywords {
-		out = append(out, keyword{text: []byte(word)})
+func (k keyword) kind() valueKind {
+	switch {
+	case k.strong:
+		return strongValue
+	case k.password:
+		return passwordValue
 	}
-	for _, word := range serviceKeywords {
-		out = append(out, keyword{text: []byte(word), strong: true})
+	return plainValue
+}
+
+func isLetter(c byte) bool { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') }
+func isUpper(c byte) bool  { return c >= 'A' && c <= 'Z' }
+func isLower(c byte) bool  { return c >= 'a' && c <= 'z' }
+
+// wordAt reports whether the keyword at text[start:end] is a whole word of
+// its key: separated by non-letters or camelCase boundaries, optionally
+// plural. "bypassList", "passed" and "tokenizer" do not contain "pass" or
+// "token"; "dbPassword", "API_TOKEN" and "secretKey" do.
+func wordAt(text string, start, end int) bool {
+	if start > 0 {
+		previous := text[start-1]
+		if isLetter(previous) && !(isLower(previous) && isUpper(text[start])) {
+			return false
+		}
 	}
-	return out
-}()
+	if end < len(text) && (text[end] == 's' || text[end] == 'S') && (end+1 == len(text) || !isLower(text[end+1])) {
+		end++
+	}
+	if end < len(text) {
+		next := text[end]
+		if isLetter(next) && !(isUpper(next) && isLower(text[end-1])) {
+			return false
+		}
+	}
+	return true
+}
 
 // keyedValueIn finds key = "value" or "key": "value" where the key contains a
 // secret or service keyword and the value looks like a password. With bare,
@@ -239,6 +332,9 @@ func keyedValueIn(text string, bare bool) string {
 			}
 			start := offset + index
 			offset = start + 1
+			if !wordAt(text, start, start+len(word.text)) {
+				continue
+			}
 			keyStart := start
 			for keyStart > 0 && isKeyByte(text[keyStart-1]) {
 				keyStart--
@@ -247,7 +343,7 @@ func keyedValueIn(text string, bare bool) string {
 				continue
 			}
 			seen[keyStart] = true
-			if match := valueAfterKey(text, keyStart, start+len(word.text), bare, word.strong); match != "" {
+			if match := valueAfterKey(text, keyStart, start+len(word.text), bare, word.kind()); match != "" {
 				return match
 			}
 		}
@@ -257,7 +353,7 @@ func keyedValueIn(text string, bare bool) string {
 
 // valueAfterKey reads the rest of the key from position, then a separator
 // and a value, and returns the value when it looks like a secret.
-func valueAfterKey(text string, keyStart, position int, bare, strong bool) string {
+func valueAfterKey(text string, keyStart, position int, bare bool, kind valueKind) string {
 	cursor := position
 	for cursor < len(text) && isKeyByte(text[cursor]) {
 		cursor++
@@ -269,7 +365,12 @@ func valueAfterKey(text string, keyStart, position int, bare, strong bool) strin
 	if cursor >= len(text) || (text[cursor] != ':' && text[cursor] != '=') {
 		return ""
 	}
-	cursor = skipBlanks(text, cursor+1)
+	cursor++
+	// Go's ":=" and Ruby's "=>".
+	if cursor < len(text) && (text[cursor] == '=' || text[cursor] == '>') {
+		cursor++
+	}
+	cursor = skipBlanks(text, cursor)
 	if cursor >= len(text) {
 		return ""
 	}
@@ -297,10 +398,47 @@ func valueAfterKey(text string, keyStart, position int, bare, strong bool) strin
 			return ""
 		}
 	}
-	if len(value) >= 8 && secretLike(value, strong) {
+	if len(value) >= 8 && secretLike(value, kind) {
 		return value
 	}
 	return ""
+}
+
+// urlCredentialIn finds scheme://user:password@host URLs.
+func urlCredentialIn(text string) string {
+	for offset := 0; ; {
+		index := strings.Index(text[offset:], "://")
+		if index < 0 {
+			return ""
+		}
+		at := offset + index + 3
+		offset = at
+		schemeStart := at - 3
+		for schemeStart > 0 && (isLetter(text[schemeStart-1]) || text[schemeStart-1] == '+') {
+			schemeStart--
+		}
+		if schemeStart == at-3 {
+			continue
+		}
+		// The authority ends at the first path, space or quote; a password may
+		// itself contain "@", so the userinfo ends at the last "@" before that.
+		end := strings.IndexAny(text[at:], "/ \t\r\n\"'`?#")
+		if end < 0 {
+			end = len(text) - at
+		}
+		end = strings.LastIndexByte(text[at:at+end], '@')
+		if end < 0 {
+			continue
+		}
+		userinfo := text[at : at+end]
+		colon := strings.IndexByte(userinfo, ':')
+		if colon <= 0 {
+			continue
+		}
+		if password := userinfo[colon+1:]; secretLike(password, passwordValue) {
+			return text[schemeStart : at+end+1]
+		}
+	}
 }
 
 func skipBlanks(text string, cursor int) int {
@@ -339,7 +477,7 @@ func hostCredentialIn(text string) string {
 		if colon := strings.IndexByte(host, ':'); colon > 0 {
 			if hostLike(host[:colon]) {
 				password := host[colon+1:]
-				if len(password) >= 8 && !strings.ContainsAny(password, ":/") && secretLike(password, true) {
+				if len(password) >= 8 && !strings.ContainsAny(password, ":/") && secretLike(password, strongValue) {
 					return literal
 				}
 			}
@@ -366,7 +504,7 @@ func hostCredentialIn(text string) string {
 		if close < 0 || text[cursor+1+close] != text[cursor] {
 			continue
 		}
-		if value := text[cursor+1 : cursor+1+close]; len(value) >= 8 && secretLike(value, true) {
+		if value := text[cursor+1 : cursor+1+close]; len(value) >= 8 && secretLike(value, strongValue) {
 			return literal + ": " + value
 		}
 	}
@@ -392,6 +530,9 @@ func stripScheme(literal string) string {
 
 // hostLike reports a dotted hostname with letters, or an IPv4 address.
 func hostLike(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
 	if len(host) < 4 || !strings.Contains(host, ".") || strings.HasPrefix(host, ".") || strings.HasSuffix(host, ".") {
 		return false
 	}

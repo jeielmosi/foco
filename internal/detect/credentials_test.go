@@ -23,6 +23,12 @@ func TestCredentialsFindsHandWrittenSecrets(t *testing.T) {
 		{"a.json", "{\n  \"smtp_email_service\": \"Smtp#Secr3t_9981\"\n}"},
 		{"a.py", `DB_PASSWORD = "hunter2!Prod"`},
 		{".env", "API_TOKEN=9f2c4e7a1b3d5f60\n"},
+		{"a.py", `password = "correct-horse-battery-staple!"`},
+		{"a.py", `DATABASE_URL = "postgres://admin:S3cretPa55!@db.example.com/app"`},
+		{"a.py", `uri = "mongodb+srv://admin_prod:S3nh@SuperSecreta2026!@cluster0.mongodb.net/prod"`},
+		{"a.py", `redis = "localhost:S3cretPa55!"`},
+		{"a.go", `dbPassword := "hunter2!Prod"`},
+		{"a.rb", `:password => "hunter2!Prod"`},
 		{"a.json", `{"aws_secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`},
 	} {
 		if credentialMatch(c.path, c.text) == "" {
@@ -110,6 +116,17 @@ func TestCredentialsIgnoresOrdinaryCode(t *testing.T) {
 		{"a.py", `FineTuningAPIKey.REPORTS: "reports:disabled-organizations"`},
 		{"a.py", `{"store.background-grouping-config-id": "mobile:2021-02-12"}`},
 		{"a.py", `{"bootstrap.servers": "my.server:9092"}`},
+		{"a.py", `API_KEY_HEADER = "X-Api-Key-V2"`},
+		{"a.js", `const bypassList = "Foo-Bar1-Baz"`},
+		{"a.yml", "passed: 2024-01-01T00:00Z\n"},
+		{"a.py", `secret = "test-secret-123A"`},
+		{"a.ts", `const tokenizer = "Tok3n!zer_v2"`},
+		{"a.py", `url = "https://user@example.com/path"`},
+		{"a.py", `url = "postgres://app:${DB_PASSWORD}@db/app"`},
+		{"a.py", `password = "Please-enter"`},
+		{"a.rb", `password: "queenbee#passwords"`},
+		{"a.py", `{"PASSWORD": "some:password"}`},
+		{"a.rb", `password: "[FILTERED]"`},
 	} {
 		if match := credentialMatch(c.path, c.text); match != "" {
 			t.Errorf("false positive %q in %s", match, c.text)

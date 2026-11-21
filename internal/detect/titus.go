@@ -96,6 +96,12 @@ func NewTitus() (*Titus, error) {
 	return t, nil
 }
 
+// Ready waits for the rules to load and reports a load failure.
+func (t *Titus) Ready(ctx context.Context) error {
+	_, err := t.ready(ctx)
+	return err
+}
+
 // ready waits for the rules to load.
 func (t *Titus) ready(ctx context.Context) (*titusRules, error) {
 	select {
