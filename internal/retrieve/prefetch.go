@@ -2,6 +2,7 @@ package retrieve
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sort"
 	"sync"
@@ -9,6 +10,7 @@ import (
 
 	"foco/internal/enums"
 	"foco/internal/files"
+	"foco/internal/provider"
 )
 
 // readWorkers bounds concurrent snapshot reads. Reads mix I/O with content
@@ -45,6 +47,68 @@ func readSnapshots(ctx context.Context, reader Reader, paths []string) []files.S
 	}
 	wait.Wait()
 	return out
+}
+
+// prefetcher is implemented by evaluators that can send a request ahead of
+// need and answer a later identical Evaluate from memory.
+type prefetcher interface {
+	Prefetch(ctx context.Context, request provider.Request)
+}
+
+// prefetchEvaluator turns every Evaluate into a Prefetch, so running the
+// normal request builders through it warms exactly the requests they would
+// later send.
+type prefetchEvaluator struct{ inner prefetcher }
+
+func (p prefetchEvaluator) Requests() int { return 0 }
+
+func (p prefetchEvaluator) Evaluate(ctx context.Context, request provider.Request, _ provider.EvalOptions) (map[string]float64, error) {
+	p.inner.Prefetch(ctx, request)
+	return nil, errPrefetched
+}
+
+var errPrefetched = errors.New("prefetched")
+
+// startCandidatePrefetch warms the role-assessment and first selection-pass
+// requests of each candidate as discovery admits it. Those requests depend
+// only on the query, the path and the file content, so they can be sent while
+// discovery is still waiting on navigation, using concurrency it leaves idle.
+// The final passes then build identical requests and get memoized answers.
+// The returned stop cancels outstanding prefetches and waits for them.
+func startCandidatePrefetch(ctx context.Context, evaluator Evaluator, reader Reader, query string, discovery *discoveryState) func() {
+	source, ok := evaluator.(prefetcher)
+	if !ok {
+		return func() {}
+	}
+	warm := prefetchEvaluator{inner: source}
+	child, cancel := context.WithCancel(ctx)
+	var running sync.WaitGroup
+	discovery.Admitted = func(relative string) {
+		preview := discovery.Previews[relative]
+		running.Add(2)
+		go func() {
+			defer running.Done()
+			_, _ = assessFile(child, warm, query, candidate{Path: relative}, preview)
+		}()
+		go func() {
+			defer running.Done()
+			result := reader.ReadSnapshotReuse(child, absPath(reader.Root(), relative))
+			if result.Status != enums.SnapshotStatusSnapshot || result.Snapshot == nil {
+				return
+			}
+			snapshot := *result.Snapshot
+			snapshot.Path = relative
+			_, _ = selectFile(child, snapshot, query, 0, warm, nil, nil)
+		}()
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			discovery.Admitted = nil
+			cancel()
+			running.Wait()
+		})
+	}
 }
 
 // readAhead reads the files of one discovery level ahead of the sequential

@@ -231,6 +231,63 @@ func TestIdenticalRequestsShareOneNetworkCall(t *testing.T) {
 	}
 }
 
+func TestPrefetchAnswersLaterEvaluate(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{})
+	client.Prefetch(context.Background(), testRequest())
+	client.Prefetch(context.Background(), testRequest())
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || client.CacheHits() != 1 {
+		t.Fatalf("calls = %d hits = %d", calls, client.CacheHits())
+	}
+}
+
+func TestPrefetchStopsAtHalfTheRequestLimit(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{RequestLimit: 4})
+	for index := range 4 {
+		request := testRequest()
+		request.State = map[string]int{"index": index}
+		client.Prefetch(context.Background(), request)
+	}
+	if calls != 2 {
+		t.Fatalf("prefetch calls = %d, want 2", calls)
+	}
+}
+
+func TestPrefetchStopsAfterRateLimit(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{})
+	for index := range 3 {
+		request := testRequest()
+		request.State = map[string]int{"index": index}
+		client.Prefetch(context.Background(), request)
+	}
+	if calls != 1 {
+		t.Fatalf("prefetch calls = %d, want 1", calls)
+	}
+}
+
 func TestFailedRequestIsNotReused(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

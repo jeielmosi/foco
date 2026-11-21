@@ -2,9 +2,11 @@ package retrieve
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -528,6 +530,65 @@ func TestEvidenceDonorChangeIsNotSentAndRecorded(t *testing.T) {
 	}
 	if found < 2 {
 		t.Fatalf("changed count = %d (issues = %+v), want the evidence pass plus finalization", found, result.Issues)
+	}
+}
+
+type prefetchingEvaluator struct {
+	*scriptedEvaluator
+	mu         sync.Mutex
+	prefetched map[string]bool
+	evaluated  map[string]bool
+}
+
+func requestKey(request provider.Request) string {
+	blob, _ := json.Marshal(request)
+	return string(blob)
+}
+
+func (e *prefetchingEvaluator) Prefetch(_ context.Context, request provider.Request) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.prefetched[requestKey(request)] = true
+}
+
+func (e *prefetchingEvaluator) Evaluate(ctx context.Context, request provider.Request, options provider.EvalOptions) (map[string]float64, error) {
+	e.mu.Lock()
+	e.evaluated[requestKey(request)] = true
+	e.mu.Unlock()
+	return e.scriptedEvaluator.Evaluate(ctx, request, options)
+}
+
+func TestCandidatePrefetchWarmsExactlyTheFinalRequests(t *testing.T) {
+	root := t.TempDir()
+	writeRetrieveFile(t, root, "src/events.ts", "export function record(name: string) { return name; }\n")
+	writeRetrieveFile(t, root, "src/other.ts", "export const other = 1;\n")
+	writeRetrieveFile(t, root, "README.md", "docs\n")
+	run := func(evaluator Evaluator) RetrievalResult {
+		reader, err := files.New(root, files.DefaultPolicy(), nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reader.Close()
+		result, err := Run(context.Background(), Input{Query: "event recording"}, evaluator, reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result.Counts = Counts{}
+		return result
+	}
+	plain := run(pipelineEvaluator(nil))
+	warmed := &prefetchingEvaluator{scriptedEvaluator: pipelineEvaluator(nil), prefetched: map[string]bool{}, evaluated: map[string]bool{}}
+	got := run(warmed)
+	if !reflect.DeepEqual(plain, got) {
+		t.Fatalf("prefetch changed the result:\n%+v\n%+v", plain, got)
+	}
+	if len(warmed.prefetched) == 0 {
+		t.Fatal("no requests were prefetched")
+	}
+	for key := range warmed.prefetched {
+		if !warmed.evaluated[key] {
+			t.Fatalf("prefetched request never sent for real: %s", key)
+		}
 	}
 }
 

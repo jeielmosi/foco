@@ -82,6 +82,9 @@ type Client struct {
 	memoMu sync.Mutex
 	memo   map[memoKey]*memoCall
 	hits   int
+
+	prefetchSlots chan struct{}
+	prefetchOff   bool
 }
 
 // pooledClient returns an HTTP client whose connection pool can keep one idle
@@ -126,6 +129,7 @@ func New(profile config.Profile, apiKey string, options Options) *Client {
 		httpClient: httpClient, timeout: timeout,
 		requestLimit: requestLimit, now: now, sleep: options.Sleep,
 		slots: make(chan struct{}, concurrency), authDone: make(chan struct{}),
+		prefetchSlots: make(chan struct{}, max(1, concurrency/2)),
 	}
 	return client
 }
@@ -205,6 +209,78 @@ func (c *Client) Evaluate(ctx context.Context, request Request, options EvalOpti
 			return copyScores(call.scores), nil
 		}
 	}
+}
+
+// Prefetch sends request ahead of need so a later identical Evaluate is
+// answered from memory. It never retries and holds at most half of the
+// concurrency slots, so foreground requests always find room. It does nothing
+// once half the request limit is used, while the provider asks to back off,
+// or after any 429, so speculation can neither exhaust the request budget nor
+// add pressure to a rate-limited provider.
+func (c *Client) Prefetch(ctx context.Context, request Request) {
+	if c.schema == nil {
+		return
+	}
+	body, err := c.schema.marshalRequest(c.profile.Model, request)
+	if err != nil {
+		return
+	}
+	key := memoKey{body: sha256.Sum256(body)}
+	c.memoMu.Lock()
+	_, found := c.memo[key]
+	c.memoMu.Unlock()
+	if found {
+		return
+	}
+	select {
+	case c.prefetchSlots <- struct{}{}:
+	case <-ctx.Done():
+		return
+	}
+	defer func() { <-c.prefetchSlots }()
+	if !c.prefetchAllowed() {
+		return
+	}
+	c.memoMu.Lock()
+	if c.memo == nil {
+		c.memo = map[memoKey]*memoCall{}
+	}
+	if _, found := c.memo[key]; found {
+		c.memoMu.Unlock()
+		return
+	}
+	call := &memoCall{done: make(chan struct{})}
+	c.memo[key] = call
+	c.memoMu.Unlock()
+	scores, ok := c.prefetchOnce(ctx, body, request)
+	c.memoMu.Lock()
+	if ok {
+		call.scores, call.ok = scores, true
+	} else {
+		delete(c.memo, key)
+	}
+	c.memoMu.Unlock()
+	close(call.done)
+}
+
+func (c *Client) prefetchAllowed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return !c.prefetchOff && !c.authFailed && c.requests < c.requestLimit/2 && !c.cooldown.After(c.now())
+}
+
+func (c *Client) prefetchOnce(ctx context.Context, body []byte, request Request) (map[string]float64, bool) {
+	if c.assertActive(ctx) != nil || c.acquire(ctx) != nil {
+		return nil, false
+	}
+	scores, failure, _, status := c.attempt(ctx, body, request)
+	c.release()
+	if status == http.StatusTooManyRequests {
+		c.mu.Lock()
+		c.prefetchOff = true
+		c.mu.Unlock()
+	}
+	return scores, failure == nil
 }
 
 func copyScores(scores map[string]float64) map[string]float64 {

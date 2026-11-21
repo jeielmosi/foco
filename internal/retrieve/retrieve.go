@@ -107,6 +107,8 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 		}
 		return outcome
 	})
+	stopPrefetch := startCandidatePrefetch(ctx, evaluator, reader, input.Query, discovery)
+	defer stopPrefetch()
 	if err := discover(ctx, state.root, reader, input.Query, []string{"."}, nil, navigator, state.issues.add, state.issues.fatal, state.report, discovery); err != nil {
 		return RetrievalResult{}, err
 	}
@@ -279,6 +281,7 @@ func Run(ctx context.Context, input Input, evaluator Evaluator, reader Reader) (
 			mergeSelection(selectOutcomes(evidence))
 		}
 	}
+	stopPrefetch()
 	for path, result := range assessments {
 		file, ok := filesByPath[path]
 		if !ok || file.SourceOmitted {

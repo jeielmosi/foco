@@ -16,6 +16,8 @@ type discoveryState struct {
 	Pruned      map[string]requests.NavigationItem
 	Previews    map[string]*requests.FilePreview
 	Donors      map[string][]Donor
+	// Admitted, when set, is called once per newly admitted candidate path.
+	Admitted func(path string)
 }
 
 type levelDirectory struct {
@@ -197,6 +199,9 @@ func discover(
 				continue
 			}
 			prior, ok := state.Candidates[entry.item.Path]
+			if !ok && state.Admitted != nil {
+				state.Admitted(entry.item.Path)
+			}
 			if !ok || entry.score > prior.Score {
 				state.Candidates[entry.item.Path] = candidate{
 					Path: entry.item.Path, ContentHash: donorHash(state.Donors[entry.item.Path]), Score: entry.score,
