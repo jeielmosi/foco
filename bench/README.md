@@ -9,6 +9,18 @@ provider, and writes a report in the format pull requests use.
     make bench BENCH_SUITE=medium BENCH_FLAGS='-runs 5 -tags vectorscan'
     make bench-fetch BENCH_SUITE=large           # download corpora ahead of time
 
+To compare foco against another tool that speaks System One, pass an
+executable as the base instead of a ref. `bench/jevgrep.sh` wraps jevgrep:
+
+    npm install --prefix /tmp/jg @dzhng/jevgrep   # or a local .tgz build
+    JG=/tmp/jg/node_modules/.bin/jg go run ./bench/cmd/foco-bench run \
+      -base-bin bench/jevgrep.sh -base-label "jevgrep 0.8.5" -head HEAD
+
+The wrapper receives `FOCO_BENCH_ENDPOINT` (and `NODE_EXTRA_CA_CERTS` for the
+fake provider's certificate), saves credentials once, and runs every search
+with `--no-cache`, because foco has no response cache. The detector benchmark
+is skipped for external tools, and outputs always differ because the formats do.
+
 The report goes to `bench/results/report.md` (paste it under `### Benchmark`
 in the pull request) and the raw samples to `bench/results/results.json`. The
 run exits with an error if the head build sends any must-exclude content to the

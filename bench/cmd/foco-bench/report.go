@@ -81,6 +81,13 @@ func relative(old, new float64) string {
 	return fmt.Sprintf("%+.4f", (new-old)/old)
 }
 
+func (b build) link(repoURL string) string {
+	if b.Commit == "" {
+		return "`" + b.Ref + "`"
+	}
+	return commitLink(repoURL, b.Commit)
+}
+
 func commitLink(repoURL, commit string) string {
 	if repoURL == "" {
 		return "`" + commit[:8] + "`"
@@ -119,7 +126,7 @@ func (r results) markdown(repoURL string) string {
 	fmt.Fprintf(&out, "### Benchmark\n\n")
 	fmt.Fprintf(&out, "Scenario: `foco \"<query>\" <corpus>` end to end on the `%s` suite of [`bench/corpora.json`](bench/corpora.json) (each corpus pinned to a commit), against the deterministic fake System One provider in `bench/cmd/foco-bench` over %s with %s, %s. %s build, %d CPUs, %s, %s. Time is wall clock and CPU is user time, each the median of %d run(s) after one warm-up run per build.\n\n",
 		s.Suite, transport, latency, strings.Join(limits, ", "), engine, s.CPUs, s.Platform, s.GoVersion, s.Runs)
-	fmt.Fprintf(&out, "Benchmark comparison for %s (base) vs %s (PR)\n\n", commitLink(repoURL, r.Base.Commit), commitLink(repoURL, r.Head.Commit))
+	fmt.Fprintf(&out, "Benchmark comparison for %s (base) vs %s (PR)\n\n", r.Base.link(repoURL), r.Head.link(repoURL))
 	out.WriteString("| Benchmark | Time | CPU | Time Old | Time New | CPU Old | CPU New |\n|---|---:|---:|---:|---:|---:|---:|\n")
 	for _, item := range r.Scenarios {
 		baseWall, baseUser, _ := item.medians("base")

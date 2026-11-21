@@ -38,9 +38,12 @@ func searchEnv(scratch string, provider *fakeProvider) ([]string, error) {
 	if err := os.WriteFile(filepath.Join(dir, "credentials.json"), append(credentials, '\n'), 0o600); err != nil {
 		return nil, err
 	}
-	env := append(os.Environ(), "XDG_CONFIG_HOME="+configHome, "CI=1")
+	// FOCO_BENCH_* tell an external -base-bin wrapper where the provider is;
+	// NODE_EXTRA_CA_CERTS lets Node-based tools such as jevgrep trust it.
+	env := append(os.Environ(), "XDG_CONFIG_HOME="+configHome, "CI=1",
+		"FOCO_BENCH_ENDPOINT="+provider.endpoint(), "FOCO_BENCH_SCRATCH="+scratch)
 	if provider.caFile != "" {
-		env = append(env, "SSL_CERT_FILE="+provider.caFile)
+		env = append(env, "SSL_CERT_FILE="+provider.caFile, "NODE_EXTRA_CA_CERTS="+provider.caFile)
 	}
 	return env, nil
 }

@@ -111,6 +111,8 @@ func runCommand(args []string) error {
 	repoURL := flags.String("repo-url", "", "web URL used for commit links (default: derived from origin)")
 	baseRef := flags.String("base", "main", "base ref")
 	headRef := flags.String("head", "HEAD", "head ref; \".\" builds the working tree with uncommitted changes")
+	baseBin := flags.String("base-bin", "", "use this executable as the base instead of building -base; see bench/README.md")
+	baseLabel := flags.String("base-label", "", "name shown for -base-bin in the report")
 	runs := flags.Int("runs", 3, "timed runs per build and search")
 	tags := flags.String("tags", "", "build tags for both builds, e.g. vectorscan (needs cgo and libhs)")
 	outDir := flags.String("out", "bench/results", "directory for report.md and results.json")
@@ -147,8 +149,17 @@ func runCommand(args []string) error {
 	}
 	defer os.RemoveAll(scratch)
 
-	base, err := prepareBuild("base", *baseRef, root, options.cache, *tags, logf)
-	if err != nil {
+	var base build
+	if *baseBin != "" {
+		absolute, err := filepath.Abs(*baseBin)
+		if err != nil {
+			return err
+		}
+		base = build{Label: "base", Ref: *baseLabel, Binary: absolute}
+		if base.Ref == "" {
+			base.Ref = filepath.Base(absolute)
+		}
+	} else if base, err = prepareBuild("base", *baseRef, root, options.cache, *tags, logf); err != nil {
 		return err
 	}
 	head, err := prepareBuild("head", *headRef, root, options.cache, *tags, logf)
@@ -214,6 +225,11 @@ func runCommand(args []string) error {
 		}
 		comparison := &detectComparison{}
 		for _, b := range builds {
+			if b.Commit == "" {
+				logf("skipping detector benchmark: %s is not a foco build", b.Ref)
+				comparison = nil
+				break
+			}
 			binary, err := buildDetector(b, options.cache, *tags, scratch, logf)
 			if err != nil {
 				return err
@@ -229,7 +245,9 @@ func runCommand(args []string) error {
 				comparison.Head = result
 			}
 		}
-		out.Detect = comparison
+		if comparison != nil {
+			out.Detect = comparison
+		}
 	}
 
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
