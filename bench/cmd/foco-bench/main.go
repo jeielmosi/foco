@@ -113,6 +113,8 @@ func runCommand(args []string) error {
 	headRef := flags.String("head", "HEAD", "head ref; \".\" builds the working tree with uncommitted changes")
 	baseBin := flags.String("base-bin", "", "use this executable as the base instead of building -base; see bench/README.md")
 	baseLabel := flags.String("base-label", "", "name shown for -base-bin in the report")
+	baseArgs := flags.String("base-args", "", "extra foco flags for the base build, space-separated (e.g. \"--pipeline classic\")")
+	headArgs := flags.String("head-args", "", "extra foco flags for the head build, space-separated")
 	runs := flags.Int("runs", 3, "timed runs per build and search")
 	tags := flags.String("tags", "", "build tags for both builds, e.g. vectorscan (needs cgo and libhs)")
 	outDir := flags.String("out", "bench/results", "directory for report.md and results.json")
@@ -186,6 +188,7 @@ func runCommand(args []string) error {
 	if options.corpora != "" {
 		out.Settings.Suite = options.corpora
 	}
+	out.Settings.BaseArgs, out.Settings.HeadArgs = *baseArgs, *headArgs
 	builds := []build{base, head}
 	leaked := false
 	for _, entry := range selected {
@@ -194,15 +197,21 @@ func runCommand(args []string) error {
 				Name:   fmt.Sprintf("BM_Search/%s/q%d", entry.Name, index+1),
 				Corpus: entry.Name, Query: query, Runs: map[string][]sample{},
 			}
-			arguments := []string{query, dirs[entry.Name]}
+			argumentsFor := func(b build) []string {
+				extra := strings.Fields(*baseArgs)
+				if b.Label == "head" {
+					extra = strings.Fields(*headArgs)
+				}
+				return append(extra, query, dirs[entry.Name])
+			}
 			for _, b := range builds {
-				if _, err := runSearch(b.Binary, env, arguments, fake, entry.MustExclude); err != nil {
+				if _, err := runSearch(b.Binary, env, argumentsFor(b), fake, entry.MustExclude); err != nil {
 					return fmt.Errorf("%s warm-up with %s: %w", item.Name, b.Label, err)
 				}
 			}
 			for run := 0; run < *runs; run++ {
 				for _, b := range builds {
-					result, err := runSearch(b.Binary, env, arguments, fake, entry.MustExclude)
+					result, err := runSearch(b.Binary, env, argumentsFor(b), fake, entry.MustExclude)
 					if err != nil {
 						return fmt.Errorf("%s with %s: %w", item.Name, b.Label, err)
 					}
