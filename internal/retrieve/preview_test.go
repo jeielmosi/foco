@@ -17,7 +17,7 @@ import (
 
 func TestPreviewFileCapsBytesAndJSONWithoutDeclarations(t *testing.T) {
 	source := strings.Repeat("x", 40000)
-	preview := previewFile(files.Snapshot{Path: "a.ts", Source: source})
+	preview := previewFile(files.Snapshot{Path: "a.ts", Source: source}, false)
 	if preview.SizeBytes != 40000 || !preview.Truncated {
 		t.Fatalf("preview = %+v", preview)
 	}
@@ -72,7 +72,7 @@ func TestExtensionMatchesNodePathExtnameForDotfiles(t *testing.T) {
 
 func TestPreviewFileKeepsRuneBoundaryAtByteCap(t *testing.T) {
 	source := strings.Repeat("a", PreviewBytes-1) + "é" + "tail"
-	preview := previewFile(files.Snapshot{Path: "a.txt", Source: source})
+	preview := previewFile(files.Snapshot{Path: "a.txt", Source: source}, false)
 	if preview.PreviewBytes != PreviewBytes-1 || !preview.Truncated {
 		t.Fatalf("preview = %+v", preview)
 	}
@@ -437,7 +437,7 @@ func TestSplitTextNormalizesSmallBudgets(t *testing.T) {
 
 func TestPreviewFileShrinkLoopHandlesSingleByteText(t *testing.T) {
 	path := "a." + strings.Repeat("x", PreviewJSONBytes+1024)
-	preview := previewFile(files.Snapshot{Path: path, Source: "z"})
+	preview := previewFile(files.Snapshot{Path: path, Source: "z"}, false)
 	if !preview.Truncated || preview.Text != "" || preview.PreviewBytes != 0 {
 		t.Fatalf("preview = %+v", preview)
 	}

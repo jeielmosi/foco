@@ -22,9 +22,17 @@ run took about 8m46s, with 99.78% of CPU samples in the repeated
 runtime, tree-sitter assets, and a persistent response cache.
 
 The rewrite removes that content-scanning path instead of porting it. Foco uses
-a path-only boolean secret gate, does not parse declarations with an AST, and
-does not persist provider responses to disk. Go provides a standalone CLI and a
-pure-Go build path, with optional Vectorscan acceleration. These are design
+a path-only boolean secret gate and does not persist provider responses to
+disk. With `--pipeline outline`, cgo builds parse Go, Python, Ruby,
+JavaScript, TypeScript, Java, C, C++ and Rust declarations with tree-sitter
+grammars compiled into the binary (no runtime assets): large files get a
+declaration outline in their previews, source selection asks about whole
+declarations instead of fixed 40-line windows, role questions ride on
+selection requests, and references are resolved locally. The default
+`classic` pipeline, other languages and builds without cgo keep the line
+windows. Go
+provides a standalone CLI, with Vectorscan acceleration and a pure-Go build
+path. These are design
 choices and measured project results, not a guarantee that every workload is
 faster than jevgrep.
 

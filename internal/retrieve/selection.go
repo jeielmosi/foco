@@ -12,6 +12,7 @@ import (
 
 	"foco/internal/enums"
 	"foco/internal/files"
+	"foco/internal/outline"
 	"foco/internal/provider"
 	"foco/internal/requests"
 )
@@ -43,10 +44,19 @@ func backUpRune(data []byte, start, finish int) int {
 	return finish
 }
 
-func buildWindows(index *textIndex) []window {
-	lineCount := len(index.lines)
+// windowsIn cuts lines first..last into overlapping WindowLines-line windows,
+// byte-capped at WindowMaxBytes. label names the windows; empty means
+// "lines a-b".
+func windowsIn(index *textIndex, first, last int, label string) []window {
+	lineCount := last
 	var out []window
-	for start := 1; start <= lineCount; {
+	name := func(start, end int) string {
+		if label != "" {
+			return label
+		}
+		return fmt.Sprintf("lines %d-%d", start, end)
+	}
+	for start := first; start <= lineCount; {
 		end := min(lineCount, start+WindowLines-1)
 		for end > start && index.offsets[end]-index.offsets[start-1] > WindowMaxBytes {
 			end--
@@ -61,14 +71,14 @@ func buildWindows(index *textIndex) []window {
 					finish = min(endByte, position+WindowMaxBytes)
 				}
 				out = append(out, window{
-					Name: fmt.Sprintf("lines %d-%d", start, end), Range: Range{StartLine: start, EndLine: end},
+					Name: name(start, end), Range: Range{StartLine: start, EndLine: end},
 					StartByte: position, EndByte: finish, Partial: true,
 				})
 				position = finish
 			}
 		} else {
 			out = append(out, window{
-				Name: fmt.Sprintf("lines %d-%d", start, end), Range: Range{StartLine: start, EndLine: end},
+				Name: name(start, end), Range: Range{StartLine: start, EndLine: end},
 				StartByte: startByte, EndByte: endByte,
 			})
 		}
@@ -86,23 +96,141 @@ func buildWindows(index *textIndex) []window {
 	return out
 }
 
-func groupWindows(index *textIndex, windows []window, limit int) [][]window {
+func buildWindows(index *textIndex, declarations []outline.Declaration) []window {
+	if len(declarations) == 0 {
+		return windowsIn(index, 1, len(index.lines), "")
+	}
+	return declarationWindows(index, declarations)
+}
+
+// declarationWindows asks about whole declarations instead of fixed line
+// windows: each function, method or type is one window named by its
+// signature, consecutive small declarations share a window up to
+// WindowLines lines, declarations too large for one window are split into
+// line windows, and source between declarations keeps line windows.
+func declarationWindows(index *textIndex, declarations []outline.Declaration) []window {
+	lineCount := len(index.lines)
+	members := map[int]bool{}
+	for _, declaration := range declarations {
+		if declaration.Container {
+			continue
+		}
+		for _, container := range declarations {
+			if container.Container && container.StartLine <= declaration.StartLine && declaration.EndLine <= container.EndLine {
+				members[container.StartLine*1_000_000+container.EndLine] = true
+			}
+		}
+	}
+	leaves := []outline.Declaration{}
+	for _, declaration := range declarations {
+		if declaration.Container && members[declaration.StartLine*1_000_000+declaration.EndLine] {
+			continue
+		}
+		if declaration.EndLine > lineCount || declaration.StartLine < 1 {
+			continue
+		}
+		if len(leaves) > 0 && declaration.StartLine <= leaves[len(leaves)-1].EndLine {
+			continue
+		}
+		leaves = append(leaves, declaration)
+	}
+	out := []window{}
+	gap := func(first, last int) {
+		if first <= last && !index.blankLines(first, last) {
+			out = append(out, windowsIn(index, first, last, "")...)
+		}
+	}
+	fits := func(first, last int) bool {
+		return last-first+1 <= 2*WindowLines && index.offsets[last]-index.offsets[first-1] <= WindowMaxBytes
+	}
+	cursor := 1
+	for position := 0; position < len(leaves); {
+		first := leaves[position]
+		gap(cursor, first.StartLine-1)
+		if !fits(first.StartLine, first.EndLine) {
+			out = append(out, windowsIn(index, first.StartLine, first.EndLine, first.Label()+" (part)")...)
+			cursor = first.EndLine + 1
+			position++
+			continue
+		}
+		end := first.EndLine
+		labels := []string{first.Label()}
+		next := position + 1
+		for next < len(leaves) && leaves[next].EndLine-first.StartLine+1 <= WindowLines &&
+			index.blankLines(end+1, leaves[next].StartLine-1) && fits(first.StartLine, leaves[next].EndLine) {
+			end = leaves[next].EndLine
+			labels = append(labels, leaves[next].Label())
+			next++
+		}
+		out = append(out, window{
+			Name: joinLabels(labels), Range: Range{StartLine: first.StartLine, EndLine: end},
+			StartByte: index.offsets[first.StartLine-1], EndByte: index.offsets[end],
+		})
+		cursor = end + 1
+		position = next
+	}
+	gap(cursor, lineCount)
+	return out
+}
+
+func joinLabels(labels []string) string {
+	out := strings.Join(labels, "; ")
+	if runes := []rune(out); len(runes) > 240 {
+		out = string(runes[:240]) + "…"
+	}
+	return out
+}
+
+func groupWindows(index *textIndex, windows []window, limit int, sparse bool) [][]window {
 	var groups [][]window
 	current := []window{}
+	sum := 0
 	for _, entry := range windows {
 		if len(current) > 0 {
 			byteLength := index.offsets[entry.Range.EndLine] - index.offsets[current[0].Range.StartLine-1]
+			if sparse {
+				byteLength = sum + entry.EndByte - entry.StartByte
+			}
 			if len(current) >= limit || byteLength > SelectionGroupSourceBytes {
 				groups = append(groups, current)
 				current = []window{}
+				sum = 0
 			}
 		}
 		current = append(current, entry)
+		sum += entry.EndByte - entry.StartByte
 	}
 	if len(current) > 0 {
 		groups = append(groups, current)
 	}
 	return groups
+}
+
+// sparseContextFor shows only the group's own windows (plus the file's
+// opening lines), for groups of non-adjacent declarations, where the
+// contiguous context would resend everything between them.
+func sparseContextFor(index *textIndex, group []window) string {
+	if len(index.bytes) <= WholeFileContextBytes {
+		return index.source
+	}
+	parts := []string{"Opening context:\n" + strings.Join(index.lines[:min(20, len(index.lines))], "\n")}
+	for _, entry := range group {
+		parts = append(parts, fmt.Sprintf("Source lines %d-%d:\n%s",
+			entry.Range.StartLine, entry.Range.EndLine, string(index.bytes[entry.StartByte:entry.EndByte])))
+	}
+	return strings.Join(parts, "\n")
+}
+
+// selectOptions adjust selectFile for the outline pipeline.
+type selectOptions struct {
+	// windows replaces the file's own windows; an empty non-nil slice asks nothing.
+	windows []window
+	// sparse sends each group's windows instead of a contiguous source range.
+	sparse bool
+	// extra questions ride on the file's first request; extraAnswers receives
+	// that request's answers.
+	extra        []provider.Question
+	extraAnswers *map[string]float64
 }
 
 func contextFor(index *textIndex, group []window) string {
@@ -345,6 +473,19 @@ func selectFile(
 	prepare func(context.Context) ([]requests.Evidence, bool, error),
 	validate func(context.Context) error,
 ) (selectionResult, error) {
+	return selectFileWith(ctx, snapshot, query, score, evaluator, prepare, validate, nil)
+}
+
+func selectFileWith(
+	ctx context.Context, snapshot files.Snapshot, query string, score float64,
+	evaluator Evaluator,
+	prepare func(context.Context) ([]requests.Evidence, bool, error),
+	validate func(context.Context) error,
+	options *selectOptions,
+) (selectionResult, error) {
+	if options == nil {
+		options = &selectOptions{}
+	}
 	issues := &issueSet{counts: map[enums.RetrievalIssueCode]int{}}
 	base := FileEvidence{
 		Path: snapshot.Path, ContentHash: snapshot.ContentHash, Score: score,
@@ -361,7 +502,15 @@ func selectFile(
 	if prepare != nil {
 		perWindow = 3
 	}
-	groups := groupWindows(index, buildWindows(index), min(SelectionBatchSize, MaxQuestionsPerRequest/perWindow))
+	windows := options.windows
+	if windows == nil {
+		windows = buildWindows(index, nil)
+	}
+	groups := groupWindows(index, windows, min(SelectionBatchSize, (MaxQuestionsPerRequest-len(options.extra))/perWindow), options.sparse)
+	contextOf := contextFor
+	if options.sparse {
+		contextOf = sparseContextFor
+	}
 	groupCount := len(groups)
 	queue := append([][]window{}, groups...)
 	selected := []span{}
@@ -413,12 +562,12 @@ func selectFile(
 		if present && len(evidence) > 0 {
 			evidencePointer = &evidence
 		}
-		request := requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group), declarationsFor(group), evidencePointer)
+		request := requests.EvidenceRequest(query, snapshot.Path, contextOf(index, group), declarationsFor(group), evidencePointer)
 		// Split an oversized group only when a single window would fit: when the
 		// shared parts (evidence, opening context) alone exceed the budget,
 		// splitting multiplies requests without making any of them fit.
 		if len(group) > 1 && stateSize(request.State) > SelectionStateBytes &&
-			stateSize(requests.EvidenceRequest(query, snapshot.Path, contextFor(index, group[:1]), declarationsFor(group[:1]), evidencePointer).State) <= SelectionStateBytes {
+			stateSize(requests.EvidenceRequest(query, snapshot.Path, contextOf(index, group[:1]), declarationsFor(group[:1]), evidencePointer).State) <= SelectionStateBytes {
 			middle := (len(group) + 1) / 2
 			queue = append([][]window{group[:middle], group[middle:]}, queue...)
 			groupCount++
@@ -434,6 +583,9 @@ func selectFile(
 				omitted = true
 				break
 			}
+		}
+		if len(jobs) == 0 && len(options.extra) > 0 {
+			request.Questions = append(request.Questions, options.extra...)
 		}
 		jobs = append(jobs, job{group: group, request: request, evidence: evidencePointer})
 	}
@@ -451,6 +603,9 @@ func selectFile(
 			}()
 		}
 		wait.Wait()
+	}
+	if options.extraAnswers != nil && len(jobs) > 0 && failed[0] == nil {
+		*options.extraAnswers = answered[0]
 	}
 	for position, current := range jobs {
 		group := current.group
