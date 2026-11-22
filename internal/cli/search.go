@@ -68,6 +68,12 @@ func runSearch(ctx context.Context, opts SearchOptions, stdout, stderr io.Writer
 		Query: opts.Query, Progress: progress.Update,
 		NavigationBatchSize: opts.NavBatchSize, NavigationBatchBytes: opts.NavBatchBytes, Pipeline: opts.Pipeline,
 	}, client, reader)
+	if loader, ok := detector.(interface{ Ready(context.Context) error }); ok && ctx.Err() == nil {
+		if loadErr := loader.Ready(ctx); loadErr != nil {
+			progress.Done()
+			return finish(stdout, loadErr)
+		}
+	}
 	return finishSearch(result, err, opts, stdout, progress)
 }
 
