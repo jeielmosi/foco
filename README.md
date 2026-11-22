@@ -88,10 +88,22 @@ jevgrep command or API integration.
 
 ## Installing Foco
 
-Building requires Go 1.27 or newer and, on Linux or macOS, `make`. Vectorscan
-acceleration is optional: when `pkg-config` and Hyperscan/Vectorscan are
-available, `make` builds the accelerated binary; otherwise it falls back to the
-portable pure-Go engine without prompting for a password.
+Building requires Go 1.27 or newer and, on Linux or macOS, `make`. `make`
+builds with Vectorscan (SIMD regex matching, about 13x less secret-scanning
+CPU) by default. It uses a system Hyperscan/Vectorscan when `pkg-config` finds
+one, then tries Homebrew or the system package manager with passwordless
+`sudo`. Without root on Fedora or Debian/Ubuntu, it downloads the distribution
+package with `dnf download` or `apt-get download`, unpacks it into
+`~/.local/share/foco/vectorscan` (override with `FOCO_VECTORSCAN_PREFIX`) and
+links the binary to it. If none of these work, it falls back to the portable
+pure-Go engine without prompting for a password.
+
+Vectorscan is a shared library (`libhs`), not a separate program. On Linux,
+`make install` copies the exact `libhs` the binary was linked against to
+`$PREFIX/lib/foco`, where the installed binary looks for it, so it keeps
+working after the build-time copy or the system package changes. If the
+installed binary still cannot start, `make install` installs the pure-Go build
+instead. `make uninstall` removes both.
 
     make            # gofmt + vet + tests, then build bin/foco
     make install    # install to ~/.local/bin/foco
@@ -104,6 +116,12 @@ To build without `make`:
 
     GOTOOLCHAIN=auto CGO_ENABLED=1 go build -tags vectorscan -o bin/foco ./cmd/cli   # accelerated
     GOTOOLCHAIN=auto CGO_ENABLED=0 go build -o bin/foco-pure ./cmd/cli               # pure Go
+
+Go has no way to turn a build tag on by default, so a plain `go build` or
+`go install` without `-tags vectorscan` always produces the pure-Go engine, and
+the accelerated command above needs `pkg-config` to find `libhs`. Prefer `make`,
+which finds or fetches `libhs` first. `make check` runs the test suite in both
+builds, skipping the Vectorscan pass only when no `libhs` can be found.
 
 `make deps` installs `pkg-config` and Hyperscan/Vectorscan explicitly. Node.js
 22.20+, npm/npx, and network access are needed only by `foco skill`; searches,

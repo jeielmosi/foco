@@ -21,6 +21,19 @@ type ContentChecker interface {
 	DetectPath(ctx context.Context, path string) (bool, error)
 }
 
+// ContentScanner is an optional ContentChecker extension that scans bytes the
+// reader already holds instead of reading the file again.
+type ContentScanner interface {
+	DetectContent(ctx context.Context, path string, content []byte) (bool, error)
+}
+
+func (r *Reader) detect(ctx context.Context, path string, content []byte) (bool, error) {
+	if scanner, ok := r.detector.(ContentScanner); ok {
+		return scanner.DetectContent(ctx, path, content)
+	}
+	return r.detector.DetectPath(ctx, path)
+}
+
 type Snapshot struct {
 	Path        string
 	Source      string

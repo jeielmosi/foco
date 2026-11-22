@@ -62,6 +62,9 @@ Search options:
   --exclude PATTERN       Skip paths matching a gitignore pattern; repeatable
   --no-cache              Disable cache reads and writes
   --concurrency N         Limit in-flight API requests; try 1–4 on slow networks
+  --parallel N            CPU cores to use; 0 means all (default: half)
+  --nav-batch-size N      Max paths per navigation request, 1–100 (default: 100)
+  --nav-batch-bytes N     Max navigation request bytes, 38000–64000 (default: 38000)
 
 File categories: code, config, docs, data, audio, video, archives, logs, temp, unknown. Classification uses filenames;
 extensionless scripts with a recognised code shebang (Python, Node, Bun, tsx,

@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -177,13 +180,190 @@ func TestRequestLimitStopsBeforeNetwork(t *testing.T) {
 	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	_, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{})
+	other := testRequest()
+	other.State = map[string]string{"other": "state"}
+	_, err := client.Evaluate(context.Background(), other, EvalOptions{})
 	var failure *Failure
 	if !errors.As(err, &failure) || failure.Kind != enums.FailureRequestLimit {
 		t.Fatalf("got %v", err)
 	}
 	if calls != 1 {
 		t.Fatalf("calls: %d", calls)
+	}
+}
+
+func TestIdenticalRequestsShareOneNetworkCall(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		<-release
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{RequestLimit: 1})
+	var wait sync.WaitGroup
+	errs := make([]error, 4)
+	for index := range errs {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, errs[index] = client.Evaluate(context.Background(), testRequest(), EvalOptions{})
+		}()
+	}
+	for client.Requests() == 0 {
+		runtime.Gosched()
+	}
+	close(release)
+	wait.Wait()
+	for _, err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || client.Requests() != 1 || client.CacheHits() != 4 {
+		t.Fatalf("calls = %d requests = %d hits = %d", calls, client.Requests(), client.CacheHits())
+	}
+}
+
+func TestPrefetchAnswersLaterEvaluate(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{})
+	client.Prefetch(context.Background(), testRequest())
+	client.Prefetch(context.Background(), testRequest())
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || client.CacheHits() != 1 {
+		t.Fatalf("calls = %d hits = %d", calls, client.CacheHits())
+	}
+}
+
+func TestPrefetchStopsAtHalfTheRequestLimit(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{RequestLimit: 4})
+	for index := range 4 {
+		request := testRequest()
+		request.State = map[string]int{"index": index}
+		client.Prefetch(context.Background(), request)
+	}
+	if calls != 2 {
+		t.Fatalf("prefetch calls = %d, want 2", calls)
+	}
+}
+
+func TestPrefetchStopsAfterRateLimit(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{})
+	for index := range 3 {
+		request := testRequest()
+		request.State = map[string]int{"index": index}
+		client.Prefetch(context.Background(), request)
+	}
+	if calls != 1 {
+		t.Fatalf("prefetch calls = %d, want 1", calls)
+	}
+}
+
+func burst(t *testing.T, tls bool) (connections int64, elapsed time.Duration) {
+	t.Helper()
+	var opened atomic.Int64
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		fmt.Fprint(w, answersBody())
+	}))
+	server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	if tls {
+		server.EnableHTTP2 = true
+		server.StartTLS()
+	} else {
+		server.Start()
+	}
+	defer server.Close()
+	transport := server.Client().Transport.(*http.Transport).Clone()
+	transport.MaxIdleConnsPerHost = 16
+	transport.ForceAttemptHTTP2 = true
+	client := New(systemOneProfile(server), "key", Options{Concurrency: 16, HTTPClient: &http.Client{Transport: transport}})
+	started := time.Now()
+	var wait sync.WaitGroup
+	for index := range 16 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			request := testRequest()
+			request.State = map[string]int{"index": index}
+			if _, err := client.Evaluate(context.Background(), request, EvalOptions{}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wait.Wait()
+	return opened.Load(), time.Since(started)
+}
+
+func TestFirstBurstSharesOneHTTP2Connection(t *testing.T) {
+	if connections, _ := burst(t, true); connections != 1 {
+		t.Fatalf("HTTP/2 burst opened %d connections, want 1", connections)
+	}
+}
+
+func TestFirstBurstStaysConcurrentOverHTTP1(t *testing.T) {
+	connections, elapsed := burst(t, false)
+	if elapsed > 400*time.Millisecond || connections < 2 {
+		t.Fatalf("HTTP/1.1 burst took %v over %d connections; requests were serialized", elapsed, connections)
+	}
+}
+
+func TestFailedRequestIsNotReused(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls <= 2 {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		fmt.Fprint(w, answersBody())
+	}))
+	defer server.Close()
+
+	client := New(systemOneProfile(server), "key", Options{})
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err == nil {
+		t.Fatal("want failure")
+	}
+	if _, err := client.Evaluate(context.Background(), testRequest(), EvalOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || client.CacheHits() != 0 {
+		t.Fatalf("calls = %d hits = %d", calls, client.CacheHits())
 	}
 }
 

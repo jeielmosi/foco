@@ -11,24 +11,35 @@ import (
 )
 
 const (
-	StageWorkers             = 32
-	RelevanceBoundary        = 0.5
-	WeakScoreCeiling         = 0.6
-	MinimumPositiveScores    = 32
-	NavigationByteBudget     = 8_000_000
-	SourceInspectionLimit    = 1_000_000
-	PreviewBytes             = 16_384
-	PreviewJSONBytes         = 24_000
-	PreviewSampleJSONBytes   = 28_000
-	NavigationBatchSize      = 128
-	NavigationBatchBytes     = 38_000
-	EvidenceBytes            = 64_000
-	SourceConfidenceBoundary = 0.7
-	DiscoveryLimit           = 100_000
-	WholeFileContextBytes    = 16_000
-	WindowLines              = 40
-	WindowOverlap            = 10
-	WindowMaxBytes           = 24_000
+	StageWorkers           = 32
+	RelevanceBoundary      = 0.5
+	WeakScoreCeiling       = 0.6
+	MinimumPositiveScores  = 32
+	NavigationByteBudget   = 8_000_000
+	SourceInspectionLimit  = 1_000_000
+	PreviewBytes           = 16_384
+	PreviewJSONBytes       = 24_000
+	PreviewSampleJSONBytes = 28_000
+	NavigationBatchSize    = 100
+	NavigationBatchBytes   = 38_000
+	SelectionBatchSize     = 128
+	// MaxQuestionsPerRequest is the most questions one request may carry.
+	// Command Code's Jev endpoint rejects larger requests with HTTP 400, and
+	// navigation requests are not split on a 400, so their items were lost.
+	MaxQuestionsPerRequest = 100
+	// SelectionGroupSourceBytes caps the source one selection request carries,
+	// and SelectionStateBytes its whole serialized state. Jev's context is 32K
+	// tokens for the state plus the longest question; indented code measured
+	// close to one token per byte, and a 42 KB group was rejected.
+	SelectionGroupSourceBytes = 30_000
+	SelectionStateBytes       = 40_000
+	EvidenceBytes             = 64_000
+	SourceConfidenceBoundary  = 0.7
+	DiscoveryLimit            = 100_000
+	WholeFileContextBytes     = 16_000
+	WindowLines               = 40
+	WindowOverlap             = 10
+	WindowMaxBytes            = 24_000
 )
 
 type Issue struct {

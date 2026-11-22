@@ -59,7 +59,7 @@ func (r *Reader) readSnapshot(ctx context.Context, path string, reuse bool) Snap
 		return SnapshotResult{Status: enums.SnapshotStatusExcluded, Reason: enums.FileReasonInvalidUTF8}
 	}
 	if !r.policy.IncludeSensitive && r.detector != nil {
-		excluded, err := r.detector.DetectPath(ctx, decision.Path)
+		excluded, err := r.detect(ctx, decision.Path, data)
 		if err != nil {
 			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				return SnapshotResult{Status: enums.SnapshotStatusIssue, Issue: enums.FileIssueInterrupted}
