@@ -98,7 +98,12 @@ portable pure-Go engine without prompting for a password.
 
 `make install` does not require `sudo`. It accepts `PREFIX` for a custom
 location (`make install PREFIX=/custom/prefix`); `make install-pure` forces the
-pure-Go binary and `make uninstall` removes the installed executable.
+pure-Go binary. Both install targets copy `SKILL.md` to
+`${XDG_CONFIG_HOME:-~/.config}/foco/SKILL.md` (that is,
+`$HOME/.config/foco/SKILL.md` when `XDG_CONFIG_HOME` is unset). Run
+`make install` before `foco skill` when using a fresh config directory.
+`make uninstall` removes only the executable and preserves this user
+configuration.
 `~/.local/bin` must be on `PATH` for `foco` to resolve without an absolute path.
 To build without `make`:
 

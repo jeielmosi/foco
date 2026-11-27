@@ -103,8 +103,8 @@ help:
 		'make                        check + build (auto-installs Vectorscan or falls back to pure Go)' \
 		'make build                  Build bin/foco (auto-installs Vectorscan or falls back)' \
 		'make build-pure             Build bin/foco-pure with the pure-Go fallback' \
-		'make install                Install foco to $(BINDIR)' \
-		'make install-pure           Install the pure-Go binary to $(BINDIR)' \
+		'make install                Install foco to $(BINDIR) and skill to $${XDG_CONFIG_HOME:-~/.config}/foco/SKILL.md' \
+		'make install-pure           Install the pure-Go binary to $(BINDIR) and skill to $${XDG_CONFIG_HOME:-~/.config}/foco/SKILL.md' \
 		'make uninstall              Remove foco from $(BINDIR)' \
 		'make deps                   Install pkg-config + Hyperscan/Vectorscan' \
 		'make check-vectorscan       Verify pkg-config can find libhs' \

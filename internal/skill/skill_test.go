@@ -21,6 +21,24 @@ type fakeRunner struct {
 	onRun      func([]string)
 }
 
+func writeSkillConfig(t *testing.T, content string) string {
+	t.Helper()
+	configRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	t.Setenv("LOCALAPPDATA", cacheRoot)
+	t.Setenv("HOME", cacheRoot)
+	source := filepath.Join(configRoot, skillName)
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
+
 func (f *fakeRunner) NodeVersion(ctx context.Context) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -57,6 +75,7 @@ func TestInstallRejectsOldNodeVersions(t *testing.T) {
 
 func TestInstallAcceptsSupportedNodeVersions(t *testing.T) {
 	for _, version := range []string{"22.20.0", "22.23.3", "23.0.0", "24.0.0"} {
+		writeSkillConfig(t, "# Foco skill\n")
 		runner := &fakeRunner{version: version}
 		code, err := Install(context.Background(), Options{}, runner, Process{})
 		if code != 0 || err != nil || runner.runs != 1 {
@@ -77,6 +96,7 @@ func TestInstallRequiresNpxWhenNodeIsMissing(t *testing.T) {
 }
 
 func TestInstallRequiresNpxWhenRunReturnsNotFound(t *testing.T) {
+	writeSkillConfig(t, "# Foco skill\n")
 	runner := &fakeRunner{version: "22.20.0", runErr: ErrExecutableNotFound}
 	code, err := Install(context.Background(), Options{}, runner, Process{})
 	if code != 1 {
@@ -88,6 +108,7 @@ func TestInstallRequiresNpxWhenRunReturnsNotFound(t *testing.T) {
 }
 
 func TestInstallMapsUnexpectedRunError(t *testing.T) {
+	writeSkillConfig(t, "# Foco skill\n")
 	runner := &fakeRunner{version: "22.20.0", runErr: errors.New("boom")}
 	code, err := Install(context.Background(), Options{}, runner, Process{})
 	if code != 1 {
@@ -100,6 +121,7 @@ func TestInstallMapsUnexpectedRunError(t *testing.T) {
 
 func TestInstallPropagatesChildExitCode(t *testing.T) {
 	for _, want := range []int{0, 1, 2, 130} {
+		writeSkillConfig(t, "# Foco skill\n")
 		runner := &fakeRunner{version: "22.20.0", code: want}
 		code, err := Install(context.Background(), Options{}, runner, Process{})
 		if err != nil || code != want {
@@ -121,32 +143,50 @@ func TestInstallAbortsBeforeSpawnWhenContextIsCanceled(t *testing.T) {
 	}
 }
 
-func TestInstallStagesShippedFocoSkill(t *testing.T) {
-	cache := t.TempDir()
-	previous := skillCacheDir
-	skillCacheDir = func() (string, error) { return cache, nil }
-	t.Cleanup(func() { skillCacheDir = previous })
-
+func TestInstallUsesConfiguredFocoSkill(t *testing.T) {
+	content := "# Distinctive configured Foco skill\n"
+	sourceDir := writeSkillConfig(t, content)
+	credentialsPath := filepath.Join(sourceDir, "credentials.json")
+	if err := os.WriteFile(credentialsPath, []byte("sensitive credentials"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	options := Options{
 		Agents: []string{"claude-code", "cursor"},
 		Global: true,
 		Yes:    true,
 	}
-	var source, content string
+	var source string
 	runner := &fakeRunner{version: "22.20.0", onRun: func(args []string) {
 		source = args[4]
-		data, err := os.ReadFile(filepath.Join(source, "SKILL.md"))
-		if err != nil {
-			t.Fatalf("read staged skill: %v", err)
-		}
-		content = string(data)
 	}}
 	code, err := Install(context.Background(), options, runner, Process{})
 	if code != 0 || err != nil {
 		t.Fatalf("code=%d err=%v", code, err)
 	}
-	if content != focoSkill {
-		t.Fatal("installer did not receive the embedded foco skill")
+	if source == sourceDir {
+		t.Fatalf("installer source points to config directory %q", source)
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		t.Fatalf("read installer source directory: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "SKILL.md" {
+		t.Fatalf("installer source entries = %v, want only SKILL.md", entries)
+	}
+	if _, err := os.Stat(filepath.Join(source, "credentials.json")); err == nil {
+		t.Fatal("installer source contains credentials.json")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("check installer source credentials: %v", err)
+	}
+	if _, err := os.Stat(credentialsPath); err != nil {
+		t.Fatalf("configured credentials were changed: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(source, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read configured skill: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("configured skill changed: got %q, want %q", data, content)
 	}
 	if runner.name != "npx" {
 		t.Fatalf("name = %q", runner.name)
@@ -164,74 +204,24 @@ func TestInstallStagesShippedFocoSkill(t *testing.T) {
 			t.Fatalf("args = %v, want %v", runner.args, want)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(source, "SKILL.md")); err != nil {
-		t.Fatalf("staged skill source must remain valid for skills-lock.json: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(source, "v0")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("staged skill source must contain only SKILL.md: %v", err)
-	}
 }
 
-func TestInstallClearsStaleVersionedLayout(t *testing.T) {
-	cache := t.TempDir()
-	previous := skillCacheDir
-	skillCacheDir = func() (string, error) { return cache, nil }
-	t.Cleanup(func() { skillCacheDir = previous })
-
-	var source string
-	runner := &fakeRunner{version: "22.20.0", onRun: func(args []string) { source = args[4] }}
-	if code, err := Install(context.Background(), Options{}, runner, Process{}); code != 0 || err != nil {
-		t.Fatalf("first install: code=%d err=%v", code, err)
+func TestInstallRequiresInstalledSkillDefinition(t *testing.T) {
+	configRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	runner := &fakeRunner{version: "22.20.0"}
+	code, err := Install(context.Background(), Options{}, runner, Process{})
+	if code != 1 || runner.runs != 0 {
+		t.Fatalf("code=%d runs=%d", code, runner.runs)
 	}
-	stale := filepath.Join(source, "v0")
-	if err := os.MkdirAll(stale, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(stale, "SKILL.md"), []byte("stale"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runner = &fakeRunner{version: "22.20.0", onRun: func(args []string) { source = args[4] }}
-	if code, err := Install(context.Background(), Options{}, runner, Process{}); code != 0 || err != nil {
-		t.Fatalf("second install: code=%d err=%v", code, err)
-	}
-	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale versioned layout was sent to the installer: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(source, "SKILL.md")); err != nil {
-		t.Fatalf("staged skill missing: %v", err)
-	}
-}
-
-func TestShippedFocoSkillDescribesFoco(t *testing.T) {
-	for _, required := range []string{
-		"name: foco",
-		"`foco`",
-		"foco auth",
-		"system-one",
-		"gemini-decisions",
-		"openai-decisions",
-		"End context.",
-	} {
-		if !strings.Contains(focoSkill, required) {
-			t.Fatalf("shipped skill is missing %q", required)
-		}
-	}
-	for _, forbidden := range []string{
-		"`jg`",
-		"jg files",
-		"jg doctor",
-		"jg auth",
-		"--provider",
-		"jevgrep",
-		"npm install --global",
-	} {
-		if strings.Contains(focoSkill, forbidden) {
-			t.Fatalf("shipped skill still references %q", forbidden)
-		}
+	wantPath := filepath.Join(configRoot, skillName, "SKILL.md")
+	if err == nil || !strings.Contains(err.Error(), wantPath) || !strings.Contains(err.Error(), "make install") {
+		t.Fatalf("err = %v, want path %q and make install instruction", err, wantPath)
 	}
 }
 
 func TestInstallPassesProcessStreamsThrough(t *testing.T) {
+	writeSkillConfig(t, "# Foco skill\n")
 	var stdout, stderr strings.Builder
 	process := Process{Stdin: strings.NewReader(""), Stdout: &stdout, Stderr: &stderr}
 	runner := &fakeRunner{version: "22.20.0"}

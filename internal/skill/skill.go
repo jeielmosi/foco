@@ -12,11 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-
-	skillasset "foco/skill"
 )
-
-var focoSkill = skillasset.Content
 
 const (
 	minimumNodeMajor = 22
@@ -65,9 +61,9 @@ func Install(ctx context.Context, options Options, runner Runner, process Proces
 	if err := ctx.Err(); err != nil {
 		return 130, err
 	}
-	source, err := stageSkill()
+	source, err := skillSourceDir()
 	if err != nil {
-		return 1, ErrInstallerFailed
+		return 1, err
 	}
 	name, args := commandFor(runtime.GOOS, source, options, os.Getenv("ComSpec"))
 	code, err := runner.Run(ctx, name, args, process)
@@ -87,32 +83,39 @@ func installRequirementError() error {
 	return errors.New("Skill installation requires npx. Install npm, then run foco skill again.")
 }
 
-// skillCacheDir is overridden in tests.
-var skillCacheDir = os.UserCacheDir
+func skillSourceDir() (string, error) {
+	configRoot := os.Getenv("XDG_CONFIG_HOME")
+	if configRoot == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve Foco config directory: %w", err)
+		}
+		configRoot = filepath.Join(home, ".config")
+	}
 
-// stageSkill writes the skill shipped with this binary to a content-addressed
-// cache directory for the skills installer. The installed skill then matches the
-// running foco version instead of an unrelated upstream repository, and the
-// project's skills-lock.json keeps a source path that still exists. The
-// directory is recreated so a stale layout from an older version is never sent
-// to the installer.
-func stageSkill() (string, error) {
-	base, err := skillCacheDir()
+	source := filepath.Join(configRoot, skillName)
+	skillPath := filepath.Join(source, "SKILL.md")
+	content, err := os.ReadFile(skillPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("Foco skill file unavailable at %s; run make install: %w", skillPath, err)
 	}
-	sum := sha256.Sum256([]byte(focoSkill))
-	dir := filepath.Join(base, "foco", "skill", hex.EncodeToString(sum[:8]), skillName)
-	if err := os.RemoveAll(dir); err != nil {
-		return "", err
+
+	cacheRoot, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve Foco skill cache directory: %w", err)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+	sum := sha256.Sum256(content)
+	stagedSource := filepath.Join(cacheRoot, "foco", "skill", hex.EncodeToString(sum[:8]), skillName)
+	if err := os.RemoveAll(stagedSource); err != nil {
+		return "", fmt.Errorf("prepare Foco skill source directory: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(focoSkill), 0o644); err != nil {
-		return "", err
+	if err := os.MkdirAll(stagedSource, 0o755); err != nil {
+		return "", fmt.Errorf("create Foco skill source directory: %w", err)
 	}
-	return dir, nil
+	if err := os.WriteFile(filepath.Join(stagedSource, "SKILL.md"), content, 0o644); err != nil {
+		return "", fmt.Errorf("stage Foco skill file: %w", err)
+	}
+	return stagedSource, nil
 }
 
 func parseNodeVersion(raw string) (int, int, error) {

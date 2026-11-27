@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -40,6 +41,20 @@ func (f *fakeCLISkillRunner) Run(_ context.Context, name string, args []string, 
 
 func withSkillRunner(t *testing.T, runner skill.Runner) {
 	t.Helper()
+	configRoot := t.TempDir()
+	skillDir := filepath.Join(configRoot, "foco")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# Foco skill\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", configRoot)
+	cacheRoot := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheRoot)
+	t.Setenv("LOCALAPPDATA", cacheRoot)
+	t.Setenv("HOME", cacheRoot)
+
 	previous := skillRunnerFactory
 	skillRunnerFactory = func() skill.Runner { return runner }
 	t.Cleanup(func() { skillRunnerFactory = previous })
